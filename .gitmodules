@@ -1,0 +1,3 @@
+[submodule "palimpzest"]
+	path = palimpzest
+	url = git@github.com:mitdbg/palimpzest.git
