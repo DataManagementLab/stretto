@@ -419,6 +419,7 @@ def main():
     )
     parser.add_argument("--output-dir", type=Path, default=Path("benchmark_results"))
     args = parser.parse_args()
+    cost_type = CostType.RUNTIME
 
     collected_data = defaultdict(lambda: defaultdict(pd.DataFrame))
     for benchmark in args.benchmarks:
@@ -431,16 +432,15 @@ def main():
             labels_type = metrics_file.stem
             collected_data[labels_type][benchmark] = df
 
-            for cost_type in CostType:
-                for facet in args.facets:
-                    plot_runtime_per_target(
-                        df.copy(),
-                        cost_type,
-                        facet,
-                        labels_type,
-                        args.approaches,
-                        csv_path.parent,
-                    )
+            for facet in args.facets:
+                plot_runtime_per_target(
+                    df.copy(),
+                    cost_type,
+                    facet,
+                    labels_type,
+                    args.approaches,
+                    csv_path.parent,
+                )
 
             for facet in args.facets:
                 plot_meets_target(
@@ -449,31 +449,29 @@ def main():
 
     for labels_type, benchmarks_data in collected_data.items():
         df = pd.concat(benchmarks_data.values(), axis=0)
-        for cost_type in CostType:
-            for facet in args.facets:
-                plot_runtime_per_target(
-                    df.copy(),
-                    cost_type,
-                    facet,
-                    labels_type,
-                    args.approaches,
-                    args.output_dir,
-                )
+        for facet in args.facets:
+            plot_runtime_per_target(
+                df.copy(),
+                cost_type,
+                facet,
+                labels_type,
+                args.approaches,
+                args.output_dir,
+            )
 
         for facet in args.facets:
             plot_meets_target(
                 df.copy(), facet, labels_type, args.approaches, args.output_dir
             )
 
-        for cost_type in CostType:
-            plot_runtime_per_target(
-                df.copy(),
-                cost_type,
-                None,
-                labels_type,
-                args.approaches,
-                args.output_dir,
-            )
+        plot_runtime_per_target(
+            df.copy(),
+            cost_type,
+            None,
+            labels_type,
+            args.approaches,
+            args.output_dir,
+        )
         plot_meets_target(
             df.copy(), None, labels_type, args.approaches, args.output_dir
         )

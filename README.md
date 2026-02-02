@@ -16,10 +16,11 @@ git submodule update --init --recursive
 pip install -r requirements.txt
 pip install -e .
 
-# Start the backend servers
+# On another terminal: Start the backend servers
+# (open the script first to select which models to load on which GPUs)
 bash scripts/start_servers.sh
 
-# Run the demos
+# Optional: Run the demos
 python demos/artwork.py
 python demos/emails.py
 python demos/real_estate.py
@@ -37,6 +38,10 @@ python scripts/run_benchmark.py --device cuda:0
 # Set precision and recall guarantees: --precision-guarantees / --recall-guarantees
 # For example:
 python scripts/run_benchmark.py --device cuda:0 --benchmarks artwork rotowire --select-executors optim_global lotus --precision-guarantees 0.7 0.9 --recall-guarantees 0.7 0.9
+
+# To plot the results you can use our plotting script.
+# The plots will appear in benchmark_results. For instance:
+python scripts/plot_benchmark.py --benchmarks artwork_random_medium rotowire_random movie_random email_random ecommerce_random_large --approaches lotus optim_global
 
 ```
 
@@ -84,3 +89,6 @@ python scripts/run_benchmark_single_op_no_opt.py --benchmark artwork_random --al
 
 ```
 
+## Other artifacts
+
+- Artifacts from our runs are provided in benchmark_results

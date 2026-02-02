@@ -18,8 +18,6 @@ uv.lock
 kvpress/
 **/memory_report.yaml
 **.pdf
-benchmark_results/
-benchmark_results_old/
 SemBench/
 tmp_kvcache_plots/
 .devcontainer/
