@@ -15,7 +15,6 @@ profile.out
 .python-version
 .venv/
 uv.lock
-kvpress/
 **/memory_report.yaml
 **.pdf
 SemBench/
