@@ -1,4 +1,7 @@
-# Setup
+# STRETTO: a new execution engine for LLM-augmented data systems
+Stretto makes the cost–accuracy search space significantly more navigable introducing a new physical operator layer, while providing explicit, end-to-end guarantees at the query level.
+
+## ⚙️ Setup
 
 Use Python v3.13 or later.
 
@@ -13,7 +16,7 @@ git submodule update --init --recursive
 pip install -r requirements.txt
 pip install -e .
 
-# On another terminal: Start the backend servers
+# Start the backend servers
 bash scripts/start_servers.sh
 
 # Run the demos
@@ -21,7 +24,10 @@ python demos/artwork.py
 python demos/emails.py
 python demos/real_estate.py
 python demos/rotowire.py
+```
 
+## 🚀 Optimization experiments
+```sh
 # Run benchmarks
 # Basic usage (requires a GPU device specification to run Stretto):
 python scripts/run_benchmark.py --device cuda:0
@@ -34,9 +40,9 @@ python scripts/run_benchmark.py --device cuda:0 --benchmarks artwork rotowire --
 
 ```
 
-## Benchmarks
+## 📊 Benchmarks
 
-### Datasets
+### 📁 Datasets
 
 Here is how to obtain the data sets:
 
@@ -46,7 +52,7 @@ Here is how to obtain the data sets:
 - Movies: Already included, see `reasondb/benchmarks/evaluation/files/movies_1000.csv`
 - ecommerce: Download the dataset [here](https://sembench.ngrok.io/). We expect the following file structure <project-root>/SemBench/ecomm/1/fashion-dataset/...
 
-### Query Generation
+### 🔍 Query Generation
 
 Random queries are generated from predefined query shapes and operator options.
 For each benchmark (i.e. artwork, rotowire, email, movie, ecommerce), you can find:
@@ -61,3 +67,20 @@ For each benchmark (i.e. artwork, rotowire, email, movie, ecommerce), you can fi
   1. Selecting a query shape (number and order of operators)
   2. Randomly sampling operators from the operator options
   3. Creating valid operator sequences following the shape template
+
+## 🗜️ KV Cache Compression Experiments
+
+To analyze the effects of KV cache compression on individual operators without query optimization, use the `run_benchmark_single_op_no_opt.py` script. This evaluates single-operator queries (filters and/or extracts) with various compression ratios. This script tests physical operators in isolation to understand quality-cost tradeoffs across different KV cache compression ratios.
+
+**Basic usage:**
+```sh
+# Select the benchmark: --benchmark
+# Run filter operators only (default)
+# Run only extract operators: --only-extracts
+# Run all operators (filters + extracts): --all-operators
+# Specify which KV methods to compare: --kv-methods (e.g. `kv70B05` refers to 70B version of the model with compression ratio 0.5)
+
+python scripts/run_benchmark_single_op_no_opt.py --benchmark artwork_random --all-operators --kv-methods kv70B05 kv70B00
+
+```
+
