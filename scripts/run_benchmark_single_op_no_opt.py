@@ -293,9 +293,9 @@ def get_kv8B09_configurator():
     kvtextqa8B_backendcr09 = KvTextQABackend(
         "meta-llama/Llama-3.1-8B-Instruct", compression_ratio=0.9
     )
-    #kvimageqa_backendcr09 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.9)
-    #)
+    kvimageqa_backendcr09 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.9)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -303,21 +303,12 @@ def get_kv8B09_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa8B_backendcr09, quality=4, fake_cost=kv09_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llama3-llava-next-8b-hf",
-                #            compression_ratio=0.9,
-                #        )
-                #    ),
-                #    quality=3,
-                #    fake_cost=kv09_cost,
-                #),
+                ImageQaFilter(kvimageqa_backendcr09, quality=3, fake_cost=kv09_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa8B_backendcr09, quality=4, fake_cost=kv09_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa_backendcr09, quality=3, fake_cost=kv09_cost),
+                ImageQaExtract(kvimageqa_backendcr09, quality=3, fake_cost=kv09_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -341,9 +332,9 @@ def get_kv8B05_configurator():
     kvtextqa8B_backendcr05 = KvTextQABackend(
         "meta-llama/Llama-3.1-8B-Instruct", compression_ratio=0.5
     )
-    #kvimageqa_backendcr05 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.5)
-    #)
+    kvimageqa_backendcr05 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.5)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -351,21 +342,12 @@ def get_kv8B05_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa8B_backendcr05, quality=5, fake_cost=kv05_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llama3-llava-next-8b-hf",
-                #            compression_ratio=0.5,
-                #        )
-                #    ),
-                #    quality=5,
-                #    fake_cost=kv05_cost,
-                #),
+                ImageQaFilter(kvimageqa_backendcr05, quality=5, fake_cost=kv05_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa8B_backendcr05, quality=5, fake_cost=kv05_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa_backendcr05, quality=5, fake_cost=kv05_cost),
+                ImageQaExtract(kvimageqa_backendcr05, quality=5, fake_cost=kv05_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -389,9 +371,9 @@ def get_kv8B099_configurator():
     kvtextqa8B_backendcr099 = KvTextQABackend(
         "meta-llama/Llama-3.1-8B-Instruct", compression_ratio=0.99
     )
-    #kvimageqa_backendcr099 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.99)
-    #)
+    kvimageqa_backendcr099 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.99)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -399,21 +381,12 @@ def get_kv8B099_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa8B_backendcr099, quality=1, fake_cost=kv099_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llama3-llava-next-8b-hf",
-                #            compression_ratio=0.99,
-                #        )
-                #    ),
-                #    quality=1,
-                #    fake_cost=kv099_cost,
-                #),
+                ImageQaFilter(kvimageqa_backendcr099, quality=1, fake_cost=kv099_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa8B_backendcr099, quality=1, fake_cost=kv099_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa_backendcr099, quality=1, fake_cost=kv099_cost),
+                ImageQaExtract(kvimageqa_backendcr099, quality=1, fake_cost=kv099_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -437,9 +410,9 @@ def get_kv8B08_configurator():
     kvtextqa8B_backendcr08 = KvTextQABackend(
         "meta-llama/Llama-3.1-8B-Instruct", compression_ratio=0.8
     )
-    #kvimageqa_backendcr08 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.8)
-    #)
+    kvimageqa_backendcr08 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.8)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -447,21 +420,12 @@ def get_kv8B08_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa8B_backendcr08, quality=4, fake_cost=kv08_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llama3-llava-next-8b-hf",
-                #            compression_ratio=0.8,
-                #        )
-                #    ),
-                #    quality=4,
-                #    fake_cost=kv08_cost,
-                #),
+                ImageQaFilter(kvimageqa_backendcr08, quality=4, fake_cost=kv08_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa8B_backendcr08, quality=4, fake_cost=kv08_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa_backendcr08, quality=4, fake_cost=kv08_cost),
+                ImageQaExtract(kvimageqa_backendcr08, quality=4, fake_cost=kv08_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -485,9 +449,9 @@ def get_kv8B06_configurator():
     kvtextqa8B_backendcr06 = KvTextQABackend(
         "meta-llama/Llama-3.1-8B-Instruct", compression_ratio=0.6
     )
-    #kvimageqa_backendcr06 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.6)
-    #)
+    kvimageqa_backendcr06 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.6)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -495,21 +459,12 @@ def get_kv8B06_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa8B_backendcr06, quality=4, fake_cost=kv06_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llama3-llava-next-8b-hf",
-                #            compression_ratio=0.6,
-                #        )
-                #    ),
-                #    quality=4,
-                #    fake_cost=kv06_cost,
-                #),
+                ImageQaFilter(kvimageqa_backendcr06, quality=4, fake_cost=kv06_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa8B_backendcr06, quality=4, fake_cost=kv06_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa_backendcr06, quality=4, fake_cost=kv06_cost),
+                ImageQaExtract(kvimageqa_backendcr06, quality=4, fake_cost=kv06_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -533,9 +488,9 @@ def get_kv8B04_configurator():
     kvtextqa8B_backendcr04 = KvTextQABackend(
         "meta-llama/Llama-3.1-8B-Instruct", compression_ratio=0.4
     )
-    #kvimageqa_backendcr04 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.4)
-    #)
+    kvimageqa_backendcr04 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.4)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -543,16 +498,7 @@ def get_kv8B04_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa8B_backendcr04, quality=5, fake_cost=kv04_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llama3-llava-next-8b-hf",
-                #            compression_ratio=0.4,
-                #        )
-                #    ),
-                #    quality=5,
-                #    fake_cost=kv04_cost,
-                #),
+                ImageQaFilter(kvimageqa_backendcr04, quality=5, fake_cost=kv04_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa8B_backendcr04, quality=5, fake_cost=kv04_cost),
@@ -581,9 +527,9 @@ def get_kv8B03_configurator():
     kvtextqa8B_backendcr03 = KvTextQABackend(
         "meta-llama/Llama-3.1-8B-Instruct", compression_ratio=0.3
     )
-    #kvimageqa_backendcr03 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.3)
-    #)
+    kvimageqa_backendcr03 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.3)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -591,21 +537,12 @@ def get_kv8B03_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa8B_backendcr03, quality=6, fake_cost=kv03_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llama3-llava-next-8b-hf",
-                #            compression_ratio=0.3,
-                #        )
-                #    ),
-                #    quality=6,
-                #    fake_cost=kv03_cost,
-                #),
+                ImageQaFilter(kvimageqa_backendcr03, quality=6, fake_cost=kv03_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa8B_backendcr03, quality=6, fake_cost=kv03_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa_backendcr03, quality=6, fake_cost=kv03_cost),
+                ImageQaExtract(kvimageqa_backendcr03, quality=6, fake_cost=kv03_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -629,9 +566,9 @@ def get_kv8B00_configurator():
     kvtextqa8B_backendcr00 = KvTextQABackend(
         "meta-llama/Llama-3.1-8B-Instruct", compression_ratio=0.0
     )
-    #kvimageqa_backendcr00 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.0)
-    #)
+    kvimageqa_backendcr00 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llama3-llava-next-8b-hf", compression_ratio=0.0)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -639,21 +576,12 @@ def get_kv8B00_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa8B_backendcr00, quality=6, fake_cost=kv00_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llama3-llava-next-8b-hf",
-                #            compression_ratio=0.0,
-                #        )
-                #    ),
-                #    quality=3,
-                #    fake_cost=kv00_cost,
-                #),
+                ImageQaFilter(kvimageqa_backendcr00, quality=3, fake_cost=kv00_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa8B_backendcr00, quality=6, fake_cost=kv00_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa_backendcr00, quality=5, fake_cost=kv00_cost),
+                ImageQaExtract(kvimageqa_backendcr00, quality=5, fake_cost=kv00_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -716,9 +644,9 @@ def get_kv70B09_configurator():
     kvtextqa70B_backendcr09 = KvTextQABackend(
         "meta-llama/Llama-3.1-70B-Instruct", compression_ratio=0.9
     )
-    #kvimageqa70B_backendcr09 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.9)
-    #)
+    kvimageqa70B_backendcr09 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.9)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -726,21 +654,12 @@ def get_kv70B09_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa70B_backendcr09, quality=7, fake_cost=kv70B09_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llava-next-72b-hf",
-                #            compression_ratio=0.9,
-                #        )
-                #    ),
-                #    quality=7,
-                #    fake_cost=kv70B09_cost,
-                #),
+                ImageQaFilter(kvimageqa70B_backendcr09, quality=7, fake_cost=kv70B09_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa70B_backendcr09, quality=7, fake_cost=kv70B09_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa70B_backendcr09, quality=7, fake_cost=kv70B09_cost),
+                ImageQaExtract(kvimageqa70B_backendcr09, quality=7, fake_cost=kv70B09_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -764,9 +683,9 @@ def get_kv70B099_configurator():
     kvtextqa70B_backendcr099 = KvTextQABackend(
         "meta-llama/Llama-3.1-70B-Instruct", compression_ratio=0.99
     )
-    #kvimageqa70B_backendcr099 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.99)
-    #)
+    kvimageqa70B_backendcr099 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.99)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -774,21 +693,12 @@ def get_kv70B099_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa70B_backendcr099, quality=5, fake_cost=kv70B099_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llava-next-72b-hf",
-                #            compression_ratio=0.99,
-                #        )
-                #    ),
-                #    quality=5,
-                #    fake_cost=kv70B099_cost,
-                #),
+                ImageQaFilter(kvimageqa70B_backendcr099, quality=5, fake_cost=kv70B099_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa70B_backendcr099, quality=5, fake_cost=kv70B099_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa70B_backendcr099, quality=5, fake_cost=kv70B099_cost),
+                ImageQaExtract(kvimageqa70B_backendcr099, quality=5, fake_cost=kv70B099_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -812,9 +722,9 @@ def get_kv70B08_configurator():
     kvtextqa70B_backendcr08 = KvTextQABackend(
         "meta-llama/Llama-3.1-70B-Instruct", compression_ratio=0.8
     )
-    #kvimageqa70B_backendcr08 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.8)
-    #)
+    kvimageqa70B_backendcr08 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.8)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -822,21 +732,12 @@ def get_kv70B08_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa70B_backendcr08, quality=6, fake_cost=kv70B08_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llava-next-72b-hf",
-                #            compression_ratio=0.8,
-                #        )
-                #    ),
-                #    quality=8,
-                #    fake_cost=kv70B08_cost,
-                #),
+                ImageQaFilter(kvimageqa70B_backendcr08, quality=6, fake_cost=kv70B08_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa70B_backendcr08, quality=6, fake_cost=kv70B08_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa70B_backendcr08, quality=8, fake_cost=kv70B08_cost),
+                ImageQaExtract(kvimageqa70B_backendcr08, quality=8, fake_cost=kv70B08_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -860,9 +761,9 @@ def get_kv70B06_configurator():
     kvtextqa70B_backendcr06 = KvTextQABackend(
         "meta-llama/Llama-3.1-70B-Instruct", compression_ratio=0.6
     )
-    #kvimageqa70B_backendcr06 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.6)
-    #)
+    kvimageqa70B_backendcr06 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.6)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -870,21 +771,12 @@ def get_kv70B06_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa70B_backendcr06, quality=6, fake_cost=kv70B06_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llava-next-72b-hf",
-                #            compression_ratio=0.6,
-                #        )
-                #    ),
-                #    quality=8,
-                #    fake_cost=kv70B06_cost,
-                #),
+                ImageQaFilter(kvimageqa70B_backendcr06, quality=8, fake_cost=kv70B06_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa70B_backendcr06, quality=6, fake_cost=kv70B06_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa70B_backendcr06, quality=8, fake_cost=kv70B06_cost),
+                ImageQaExtract(kvimageqa70B_backendcr06, quality=8, fake_cost=kv70B06_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -908,9 +800,9 @@ def get_kv70B05_configurator():
     kvtextqa70B_backendcr05 = KvTextQABackend(
         "meta-llama/Llama-3.1-70B-Instruct", compression_ratio=0.5
     )
-    #kvimageqa70B_backendcr05 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.5)
-    #)
+    kvimageqa70B_backendcr05 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.5)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -918,21 +810,12 @@ def get_kv70B05_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa70B_backendcr05, quality=7, fake_cost=kv70B05_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llava-next-72b-hf",
-                #            compression_ratio=0.5,
-                #        )
-                #    ),
-                #    quality=9,
-                #    fake_cost=kv70B05_cost,
-                #),
+                ImageQaFilter(kvimageqa70B_backendcr05, quality=9, fake_cost=kv70B05_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa70B_backendcr05, quality=7, fake_cost=kv70B05_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa70B_backendcr05, quality=9, fake_cost=kv70B05_cost),
+                ImageQaExtract(kvimageqa70B_backendcr05, quality=9, fake_cost=kv70B05_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -956,9 +839,9 @@ def get_kv70B04_configurator():
     kvtextqa70B_backendcr04 = KvTextQABackend(
         "meta-llama/Llama-3.1-70B-Instruct", compression_ratio=0.4
     )
-    #kvimageqa70B_backendcr04 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.4)
-    #)
+    kvimageqa70B_backendcr04 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.4)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -966,21 +849,12 @@ def get_kv70B04_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa70B_backendcr04, quality=7, fake_cost=kv70B04_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llava-next-72b-hf",
-                #            compression_ratio=0.4,
-                #        )
-                #    ),
-                #    quality=9,
-                #    fake_cost=kv70B04_cost,
-                #),
+                ImageQaFilter(kvimageqa70B_backendcr04, quality=9, fake_cost=kv70B04_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa70B_backendcr04, quality=7, fake_cost=kv70B04_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa70B_backendcr04, quality=9, fake_cost=kv70B04_cost),
+                ImageQaExtract(kvimageqa70B_backendcr04, quality=9, fake_cost=kv70B04_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -1004,9 +878,9 @@ def get_kv70B03_configurator():
     kvtextqa70B_backendcr03 = KvTextQABackend(
         "meta-llama/Llama-3.1-70B-Instruct", compression_ratio=0.3
     )
-    #kvimageqa70B_backendcr03 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.3)
-    #)
+    kvimageqa70B_backendcr03 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.3)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -1014,21 +888,12 @@ def get_kv70B03_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa70B_backendcr03, quality=8, fake_cost=kv70B03_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llava-next-72b-hf",
-                #            compression_ratio=0.3,
-                #        )
-                #    ),
-                #    quality=10,
-                #    fake_cost=kv70B03_cost,
-                #),
+                ImageQaFilter(kvimageqa70B_backendcr03, quality=10, fake_cost=kv70B03_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa70B_backendcr03, quality=8, fake_cost=kv70B03_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa70B_backendcr03, quality=10, fake_cost=kv70B03_cost),
+                ImageQaExtract(kvimageqa70B_backendcr03, quality=10, fake_cost=kv70B03_cost),
             ],
             transform_operators=[
                 PythonTransform(
@@ -1052,9 +917,9 @@ def get_kv70B00_configurator():
     kvtextqa70B_backendcr00 = KvTextQABackend(
         "meta-llama/Llama-3.1-70B-Instruct", compression_ratio=0.0
     )
-    #kvimageqa70B_backendcr00 = VisionModelImageQABackend(
-    #    KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.0)
-    #)
+    kvimageqa70B_backendcr00 = VisionModelImageQABackend(
+        KvVisionModel("llava-hf/llava-next-72b-hf", compression_ratio=0.0)
+    )
     configurator = PlanConfigurator(
         llm=GPT4o(),
         physical_operators=PhysicalOperatorToolbox(
@@ -1062,21 +927,12 @@ def get_kv70B00_configurator():
             filter_operators=[
                 TraditionalFilter(quality=0, fake_cost=0),
                 TextQaFilter(kvtextqa70B_backendcr00, quality=5, fake_cost=kv70B00_cost),
-                #ImageQaFilter(
-                #    VisionModelImageQABackend(
-                #        KvVisionModel(
-                #            "llava-hf/llava-next-72b-hf",
-                #            compression_ratio=0.0,
-                #        )
-                #    ),
-                #    quality=7,
-                #    fake_cost=kv70B00_cost,
-                #),
+                ImageQaFilter(kvimageqa70B_backendcr00, quality=7, fake_cost=kv70B00_cost),
             ],
             extract_operators=[
                 TextQaExtract(kvtextqa70B_backendcr00, quality=5, fake_cost=kv70B00_cost),
                 PythonExtract(LLMPythonCodegenBackend(GPT4o()), quality=2, fake_cost=0),
-                #ImageQaExtract(kvimageqa70B_backendcr00, quality=9, fake_cost=kv70B00_cost),
+                ImageQaExtract(kvimageqa70B_backendcr00, quality=9, fake_cost=kv70B00_cost),
             ],
             transform_operators=[
                 PythonTransform(
