@@ -20,6 +20,10 @@ export OPENAI_API_KEY=....
 git submodule update --init --recursive
 
 # Install dependencies and the package
+pip install torch torchvision --index-url ...  # See https://pytorch.org/
+pip install psutil
+pip install flash-attn --no-build-isolation  # See https://github.com/Dao-AILab/flash-attention
+cd kvpress && pip install -e . && cd ..  # installs modified kv-press. Forked from: https://github.com/NVIDIA/kvpress
 pip install -r requirements.txt
 pip install -e .
 
