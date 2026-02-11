@@ -1,5 +1,12 @@
 # STRETTO: a new execution engine for LLM-augmented data systems
+
 Stretto makes the cost–accuracy search space significantly more navigable introducing a new physical operator layer, while providing explicit, end-to-end guarantees at the query level.
+This is the implementation described in
+
+> Gabriele Sanmartino, Matthias Urban, Paolo Papotti, and Carsten Binnig: "The Stretto Execution Engine for LLM-Augmented Data Systems.", arXiv preprint [[PDF]](https://arxiv.org/pdf/2602.04430)
+>
+> ![Image of Stretto Paper Title](images/title.jpg)
+> ![Image of Stretto Paper Overview](images/overview.jpg)
 
 ## ⚙️ Setup
 
@@ -28,6 +35,7 @@ python demos/rotowire.py
 ```
 
 ## 🚀 Optimization experiments
+
 ```sh
 # Run benchmarks
 # Basic usage (requires a GPU device specification to run Stretto):
@@ -78,6 +86,7 @@ For each benchmark (i.e. artwork, rotowire, email, movie, ecommerce), you can fi
 To analyze the effects of KV cache compression on individual operators without query optimization, use the `run_benchmark_single_op_no_opt.py` script. This evaluates single-operator queries (filters and/or extracts) with various compression ratios. This script tests physical operators in isolation to understand quality-cost tradeoffs across different KV cache compression ratios.
 
 **Basic usage:**
+
 ```sh
 # Select the benchmark: --benchmark
 # Run filter operators only (default)
@@ -89,6 +98,19 @@ python scripts/run_benchmark_single_op_no_opt.py --benchmark artwork_random --al
 
 ```
 
-## Other artifacts
+## 📦 Other artifacts
 
 - Artifacts from our runs are provided in benchmark_results
+
+## 📖 Citation
+
+If you use the code or the benchmarks of this repository, then please cite our paper:
+
+```
+@article{sanmartino2026stretto,
+  title={The Stretto Execution Engine for LLM-Augmented Data Systems},
+  author={Sanmartino, Gabriele and Urban, Matthias and Papotti, Paolo and Binnig, Carsten},
+  journal={arXiv preprint arXiv:2602.04430},
+  year={2026}
+}
+```
