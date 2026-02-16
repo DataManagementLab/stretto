@@ -10,7 +10,7 @@ This is the implementation described in
 
 ## ⚙️ Setup
 
-Use Python v3.13 or later.
+Use Python v3.12.
 
 ```sh
 # Export your OpenAI API key for query planning

@@ -6,7 +6,7 @@ duckdb
 dataclasses
 openai
 pillow
-transformers
+transformers<=4.53.2
 torch
 torchvision
 pandas-stubs
@@ -16,3 +16,4 @@ flask-restful
 datasets
 pandasql
 librosa
+einops

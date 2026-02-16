@@ -50,10 +50,9 @@ with RaccoonDB("movie_sampled") as rc:
     #    )
 
     df_query = (
-        reviews.filter("{id} is taken_3")
-        .filter("{reviewtext} is clearly positive")
-        .project("Keep {reviewid}")
-        .limit("Keep 5 rows")
+        reviews.filter("{id} is taken_3").filter("{reviewtext} is clearly positive")
+        # .project("Keep {reviewid}")
+        # .limit("Keep 5 rows")
     )
     result = df_query.execute(
         "positive_reviews_for_taken_3",
