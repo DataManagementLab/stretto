@@ -7,14 +7,21 @@ import time
 from typing import Dict, List, Optional, Sequence, Tuple
 import hashlib
 
+from reasondb.backends.inference_stats import forward_stats as _forward_stats
+from reasondb.backends.kv_cache_base import validate_kv_compression_ratios
+from reasondb.backends.prepare_memo import (
+    mark_prepare_done,
+    prepare_already_done,
+    prepare_fingerprint,
+)
 from reasondb.database.indentifier import ConcreteColumnIdentifier
 from reasondb.utils.cache import CACHE_DIR
 from reasondb.utils.logging import FileLogger
 
 
 AUDIO_MODEL_CACHE_DIR = CACHE_DIR / Path("audio_model_cache")
-PORT_AUDIO = 5015 
-PORT_KV_AUDIO = 5016  
+PORT_AUDIO = 5015
+PORT_KV_AUDIO = 5016
 
 
 @dataclass
@@ -86,7 +93,10 @@ class AudioModel(ABC):
         non_cached = []
         result: Dict[Path, Tuple[str, float, float]] = {}
 
-        for audio_path in audio_paths:
+        # Distinct paths only (see the same dedup in `VisionModel.invoke`). `result` is
+        # keyed by path and fanned back out over `audio_paths` below, so repeats (e.g.
+        # the cartesian product a join produces) are evaluated once.
+        for audio_path in dict.fromkeys(audio_paths):
             item = None
             if self.cache_enabled:
                 item = self.get_cached(question, audio_path)
@@ -221,7 +231,7 @@ class LocalAudioModel(AudioModel):
         json_response = response.json()
         time_end = time.time()
         runtime = time_end - time_start
-        cost = 0.0 
+        cost = 0.0
         result = []
         for audio_path in audio_paths:
             result_text = json_response.get(str(audio_path), "Not sure")
@@ -249,9 +259,28 @@ class LocalAudioModel(AudioModel):
 
 
 class KvAudioModel(AudioModel):
-    def __init__(self, model_id, compression_ratio: float):
+    def __init__(
+        self,
+        model_id,
+        effective_compression_ratio: float,
+        materialized_compression_ratio: float,
+        vanilla: bool = False,
+        keep_in_memory: bool = False,
+    ):
+        validate_kv_compression_ratios(
+            effective_compression_ratio,
+            materialized_compression_ratio,
+            vanilla,
+            keep_in_memory,
+        )
         characteristics = CHARACTERISTICS_DICT[model_id]
-        self.compression_ratio = compression_ratio
+        self.effective_compression_ratio = effective_compression_ratio
+        self.materialized_compression_ratio = materialized_compression_ratio
+        self.vanilla = vanilla
+        # Accepted for symmetry with the text/vision backends; the audio server rejects
+        # it outright (see kv_cache_audio_qa_server._validate_client_crs), as it does
+        # vanilla and relative indices.
+        self.keep_in_memory = keep_in_memory
         super().__init__(model_id, characteristics)
 
     @property
@@ -264,7 +293,14 @@ class KvAudioModel(AudioModel):
 
     @property
     def model_id(self) -> str:
-        return f"{self._model_id}-cr{str(self.compression_ratio)}"
+        parts = [f"{self._model_id}-cr{str(self.effective_compression_ratio)}"]
+        if self.materialized_compression_ratio != self.effective_compression_ratio:
+            parts.append(f"-mat{self.materialized_compression_ratio}")
+        if self.vanilla:
+            parts.append("-vanilla")
+        if self.keep_in_memory:
+            parts.append("-in-memory")
+        return "".join(parts)
 
     def setup(
         self,
@@ -275,10 +311,25 @@ class KvAudioModel(AudioModel):
         json_response = result.json()
         assert json_response["status"] == "alive"
         assert json_response["model_name"] == self._model_id
-        assert self.compression_ratio in json_response["compression_ratios"]
+        if not self.vanilla:
+            assert (
+                self.materialized_compression_ratio
+                in json_response["compression_ratios"]
+            ), (
+                f"materialized_compression_ratio {self.materialized_compression_ratio} "
+                f"not served by {self._model_id}: {json_response['compression_ratios']}"
+            )
+            assert (
+                self.effective_compression_ratio in json_response["compression_ratios"]
+            ), (
+                f"effective_compression_ratio {self.effective_compression_ratio} "
+                f"not served by {self._model_id}: {json_response['compression_ratios']}"
+            )
         logger.info(
             __name__,
-            f"KV Audio model {self.model_id} with compression ratio {self.compression_ratio} is ready",
+            f"KV Audio model {self.model_id} (effective cr "
+            f"{self.effective_compression_ratio}, materialized cr "
+            f"{self.materialized_compression_ratio}, vanilla={self.vanilla}) is ready",
         )
 
     async def prepare(
@@ -287,18 +338,37 @@ class KvAudioModel(AudioModel):
         cache_dir: Path,
         audio_paths: Sequence[Path],
     ):
+        # One backend serves several operators and prepare() runs per query, so
+        # identical requests are deduplicated; see prepare_memo.
+        cache_path = str(cache_dir) + "/kv-audio-qa-cache"
+        fingerprint = prepare_fingerprint(
+            server=f"kv-audio-qa:{self._model_id}",
+            column=column.name,
+            cache_dir=cache_path,
+            effective_compression_ratio=self.effective_compression_ratio,
+            materialized_compression_ratio=self.materialized_compression_ratio,
+            vanilla=self.vanilla,
+            keep_in_memory=self.keep_in_memory,
+            items=audio_paths,
+        )
+        if prepare_already_done(fingerprint):
+            return
         response = requests.post(
             f"http://localhost:{PORT_KV_AUDIO}/prepare_caches",
             json={
                 "column_name": column.name,
                 "audio_paths": [str(p) for p in audio_paths],
-                "compression_ratio": self.compression_ratio,
-                "cache_dir": str(cache_dir) + "/kv-audio-qa-cache",
+                "effective_compression_ratio": self.effective_compression_ratio,
+                "materialized_compression_ratio": self.materialized_compression_ratio,
+                "vanilla": self.vanilla,
+                "keep_in_memory": self.keep_in_memory,
+                "cache_dir": cache_path,
             },
         )
         assert response.status_code == 200
         json_response = response.json()
         assert json_response["status"] == "cache_ready"
+        mark_prepare_done(fingerprint)
 
     async def wind_down(self):
         pass
@@ -319,7 +389,10 @@ class KvAudioModel(AudioModel):
                 "column_name": column.name,
                 "audio_paths": [str(p) for p in audio_paths],
                 "question": question,
-                "compression_ratio": self.compression_ratio,
+                "effective_compression_ratio": self.effective_compression_ratio,
+                "materialized_compression_ratio": self.materialized_compression_ratio,
+                "vanilla": self.vanilla,
+                "keep_in_memory": self.keep_in_memory,
                 "cache_dir": str(cache_dir) + "/kv-audio-qa-cache",
                 "boolean": boolean_question,
             },
@@ -330,8 +403,9 @@ class KvAudioModel(AudioModel):
         log_odds = json_response.get("log_odds", {})
         time_end = time.time()
         runtime = time_end - time_start
+        _forward_stats(json_response, runtime, "/audio_qa")
         result = []
-        cost = 0.0  
+        cost = 0.0
         for audio_path in audio_paths:
             result_text = answers.get(str(audio_path), "Not sure")
             lo = log_odds.get(str(audio_path), 0.0)
@@ -345,95 +419,3 @@ class KvAudioModel(AudioModel):
                 )
             )
         return result
-
-
-# class LlmAudioModel(AudioModel):
-#     def __init__(self, llm: LargeLanguageModel):
-#         self.llm = copy(llm)
-#         self.llm.cache_enabled = False
-#         self.characteristics = AudioModelCharacteristics(
-#             batch_size=50,
-#             rpm=llm.characteristics.rpm,
-#             tpm=llm.characteristics.tpm,
-#             out_len=llm.characteristics.out_len,
-#             in_len=llm.characteristics.in_len,
-#             in_cost=llm.characteristics.in_cost,  
-#             out_cost=llm.characteristics.out_cost,
-#         )
-#
-#     @property
-#     def cache_enabled(self) -> bool:
-#         return True
-#
-#     @property
-#     def model_id(self) -> str:
-#         return self.llm.model_id
-#
-#     def setup(
-#         self,
-#         logger: FileLogger,
-#     ):
-#         pass
-#
-#     async def prepare(
-#         self,
-#         cache_dir: Path,
-#         audio_paths: Sequence[Path],
-#     ):
-#         await self.llm.prepare()
-#
-#     async def wind_down(self):
-#         await self.llm.close()
-#
-#     async def _invoke(
-#         self,
-#         question: str,
-#         audio_paths: List[Path],
-#         cache_dir: Path,
-#         boolean_question: bool,
-#         logger: FileLogger,
-#     ) -> List[Tuple[Path, str, float, float]]:
-#         extended_question = question
-#         if boolean_question:
-#             extended_question = (
-#                 f"Answer only yes or no, without any additional comments: {question}"
-#             )
-#         prompts = [
-#             Prompt(
-#                 messages=[
-#                     Message(
-#                         text=extended_question,
-#                         audio=audio_path,
-#                         role="user",
-#                     )
-#                 ],
-#                 temperature=0.0,
-#             )
-#             for audio_path in audio_paths
-#         ]
-#         coroutines = [
-#             self.skip_exception(
-#                 self.llm.invoke_with_runtime_and_cost(
-#                     prompt=prompt,
-#                     logger=logger,
-#                 ),
-#                 logger=logger,
-#             )
-#             for prompt in prompts
-#         ]
-#         responses = await asyncio.gather(*coroutines)
-#         result = [
-#             (audio_path, response, runtime, costs)
-#             for (audio_path, (response, runtime, costs)) in zip(audio_paths, responses)
-#         ]
-#         return result
-#
-#     async def skip_exception(self, coroutine, logger):
-#         try:
-#             return await coroutine
-#         except Exception as e:
-#             logger.warning(
-#                 __name__,
-#                 f"Error occured during Audio LM {self.model_id} invocation {e}.",
-#             )
-#             return ("Not sure", 0.0, 0.0)

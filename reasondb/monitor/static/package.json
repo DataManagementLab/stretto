@@ -1,0 +1,5 @@
+{
+  "type": "module",
+  "private": true,
+  "//": "Not a build step and not an npm project - this file exists only so `node --test` treats the .js files here as ES modules, which the browser already does via <script type=\"module\">. There are no dependencies and nothing to install."
+}

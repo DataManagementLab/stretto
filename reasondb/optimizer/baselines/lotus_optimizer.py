@@ -2,7 +2,7 @@ import math
 import numpy as np
 import torch
 from torch import Tensor
-from typing import Callable, Dict, Iterable, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterable, Optional, Sequence, Set, Tuple
 
 
 from reasondb.database.intermediate_state import IntermediateState
@@ -17,7 +17,7 @@ from reasondb.optimizer.profiler import Profiler, ProfilingOutput
 from reasondb.optimizer.sampler import (
     ProfilingSampleSpecification,
     UniformSampler,
-    DEFAULT_SAMPLE_BUDGET,
+    DEFAULT_SAMPLE_SIZE,
 )
 from reasondb.query_plan.optimized_physical_plan import (
     MultiModalTunedPipeline,
@@ -40,6 +40,52 @@ from reasondb.query_plan.unoptimized_physical_plan import UnoptimizedPhysicalPla
 from reasondb.utils.logging import FileLogger
 
 
+class LotusHumanLabelsUnsupported(ValueError):
+    """Raised when a plan carrying a human label source is handed to Lotus."""
+
+
+def assert_no_label_operators(pipeline: "TuningPipeline") -> None:
+    """Refuse to tune a plan whose labels come from a human.
+
+    Lotus's cascade is defined *relative to its silver operator*: the guarantee it tunes
+    for is "the cascade's output matches what the expensive model would have said". Both
+    threshold searches encode that premise structurally, not just in their choice of
+    reference:
+
+    - `recall_threshold_estimation` counts every escalated tuple as recovered
+      (`possible_to_keep = proxy_decisions != DISCARD`), because escalating to the
+      reference returns the reference's answer by construction.
+    - `precision_threshold_estimation` scores only the auto-keep region, leaving the
+      escalated region out of the estimate for the same reason.
+
+    With a human reference both assumptions break: recall is over-estimated by the
+    silver model's false-negative rate on the escalated tuples, and precision becomes
+    unreachable whenever the silver model's own precision is below target. Lotus would
+    then report guarantees it does not meet.
+
+    Correcting for this would require scoring the escalated region by the silver
+    model's profiled decisions, which is a different algorithm from the published one,
+    so such plans are rejected. The gradient-descent optimizer profiles the top
+    executable model against the labels like any other candidate and supports
+    `--human-labels`.
+    """
+    offending = [
+        (cascade_id, level)
+        for cascade_id, level, step in pipeline.steps_in_order_with_ids
+        if step.get_label_operator_index() is not None
+    ]
+    if offending:
+        raise LotusHumanLabelsUnsupported(
+            "LotusOptimizer cannot tune against a human label source, but "
+            f"{len(offending)} plan step(s) carry one (cascade/level {offending}). "
+            "Lotus's thresholds are tuned to match its silver operator, and its "
+            "precision/recall estimates assume escalation resolves to that reference; "
+            "against human labels they are wrong in both directions and the guarantees "
+            "it reports would not hold. Drop 'lotus' from --select-executors when "
+            "running with --human-labels, or run it without --human-labels."
+        )
+
+
 class LotusSearchSpace:
     def __init__(self, search_space: Dict[Tuple[int, int], "LotusCascadeSearchSpace"]):
         self.search_space = search_space
@@ -60,12 +106,18 @@ class LotusSearchSpace:
         logger: FileLogger,
     ) -> "LotusSearchSpace":
         result = {}
+        # Lotus is undefined against a human reference, so the whole plan is rejected,
+        # also for callers that build a search space without going through
+        # `tune_pipeline`.
+        assert_no_label_operators(pipeline)
         for cascade_id, level, step in pipeline.steps_in_order_with_ids:
             potential_proxy_ops = [
                 (operator_id, operator)
                 for (operator_id, operator) in enumerate(step.operators)
                 if operator.get_operation_identifier() in proxy_operators
             ]
+            if len(step.operators) == 0:
+                raise ValueError("No executable operators found for step")
             max_quality = max(op.quality for op in step.operators)
             potential_silver_ops = [
                 (operator_id, operator)
@@ -79,7 +131,7 @@ class LotusSearchSpace:
                     __name__, f"Multiple silver operators found for step {step}"
                 )
             if len(potential_proxy_ops) == 0:
-                logger.warning("__name__", f"No proxy operators found for step {step}")
+                logger.warning(__name__, f"No proxy operators found for step {step}")
             if len(potential_proxy_ops) > 1:
                 logger.warning(
                     __name__, f"Multiple proxy operators found for step {step}"
@@ -147,6 +199,12 @@ class LotusCascadeSearchSpace:
         self.lower_tuning_param = lower_tuning_param
         self.upper_tuning_param = upper_tuning_param
 
+    def get_operator_ids(self) -> Set[int]:
+        operator_ids = {self.silver_operator_id}
+        if self.proxy_operator_id is not None:
+            operator_ids.add(self.proxy_operator_id)
+        return operator_ids
+
 
 class LotusOptimizer(Optimizer):
     """
@@ -157,20 +215,20 @@ class LotusOptimizer(Optimizer):
         self,
         cost_type: CostType,
         proxy_operators: Sequence[str],
-        sample_budget: Callable[[int], int] = DEFAULT_SAMPLE_BUDGET,
+        sample_size: int = DEFAULT_SAMPLE_SIZE,
         guarantee_targets: bool = True,
-        conservative=True,  # True --> strictily following pseudo code
+        conservative=True,  # True --> strictly following pseudo code
     ):
         super().__init__()
         self.rng = np.random.default_rng(42)
         self.cost_type = cost_type
-        self.sample_budget = sample_budget
+        self.sample_size = sample_size
         self.proxy_operators = set(proxy_operators)
         self.guarantee_targets = guarantee_targets
         self.conservative = conservative
 
     def get_sampler(self) -> "Sampler":
-        return UniformSampler(sample_budget=self.sample_budget, sample_size=None)
+        return UniformSampler(sample_size=self.sample_size, batch_size=None)
 
     def get_profiler(self):
         assert self.database is not None
@@ -184,6 +242,9 @@ class LotusOptimizer(Optimizer):
         logger: FileLogger,
     ) -> Tuple["TunedPipeline", ProfilingCost]:
         assert self.database is not None
+        # Checked before sampling, so an unsupported plan fails before any DB reads or
+        # profiling.
+        assert_no_label_operators(pipeline)
         sampler = self.get_sampler()
         profiler = self.get_profiler()
         input_columns = pipeline.get_virtual_input_columns()
@@ -201,14 +262,22 @@ class LotusOptimizer(Optimizer):
             previous_sample=previous_sample,
             database=self.database,
         )
+        # Determine the silver/proxy operators before profiling so we only profile
+        # the operators Lotus can actually use at execution time (1 proxy + gold),
+        # rather than every candidate physical operator in the search space.
+        search_space = self.get_lotus_search_space(pipeline, logger=logger)
+        operator_filter = {
+            key: cascade_search_space.get_operator_ids()
+            for key, cascade_search_space in search_space.search_space.items()
+        }
         profiling_output = await profiler.profile(
             pipeline=pipeline,
             intermediate_state=intermediate_state,
             previous_observations=previous_observations,
             sample=sample,
             logger=logger,
+            operator_filter=operator_filter,
         )
-        search_space = self.get_lotus_search_space(pipeline, logger=logger)
         tuned_parameters = self.lotus_optimize(
             pipeline, search_space, profiling_output, guarantees, sample, logger=logger
         )
@@ -400,14 +469,12 @@ class LotusOptimizer(Optimizer):
         assert isinstance(
             cascade_search_space.upper_tuning_param, TuningParameterContinuous
         )
-        silver_op = step.operators[cascade_search_space.silver_operator_id]
-        silver_decisions = self.get_decisions(
+        reference_keep = self.reference_keep_mask(
+            step=step,
             cascade_id=cascade_id,
             level=level,
+            cascade_search_space=cascade_search_space,
             profiling_output=profiling_output,
-            parameters=silver_op.get_default_tuning_parameters(),  # type: ignore
-            operator=silver_op,
-            operator_id=cascade_search_space.silver_operator_id,
         )
 
         min_step_size = 1  # According to lotus repo
@@ -437,9 +504,7 @@ class LotusOptimizer(Optimizer):
                 operator_id=cascade_search_space.proxy_operator_id,
             )
             keep_according_to_proxy = proxy_decisions == Decision.KEEP
-            keep_according_to_silver = (
-                silver_decisions[keep_according_to_proxy] == Decision.KEEP
-            )
+            keep_according_to_silver = reference_keep[keep_according_to_proxy]
             if self.guarantee_targets:
                 precision_lower_bound = self.lower_bound_normal_approximation(
                     sample_mean=torch.mean(keep_according_to_silver.float()).item(),
@@ -512,6 +577,32 @@ class LotusOptimizer(Optimizer):
         padded_decisions[mask] = decisions
         return padded_decisions
 
+    def reference_keep_mask(
+        self,
+        step: UnoptimizedPhysicalPlanStep,
+        cascade_id: int,
+        level: int,
+        cascade_search_space: LotusCascadeSearchSpace,
+        profiling_output: ProfilingOutput,
+    ) -> Tensor:
+        """What this step's proxy thresholds are tuned against, per merged tuple.
+
+        Always the *silver* operator's own verdicts. Lotus has no notion of ground truth:
+        "correct" means "what the expensive model would have said", and that is not a
+        detail of this method but the premise both threshold searches are built on -- see
+        `assert_no_label_operators` for why a human reference cannot be substituted here.
+        """
+        silver_op = step.operators[cascade_search_space.silver_operator_id]
+        silver_decisions = self.get_decisions(
+            cascade_id=cascade_id,
+            level=level,
+            profiling_output=profiling_output,
+            parameters=silver_op.get_default_tuning_parameters(),  # type: ignore
+            operator=silver_op,
+            operator_id=cascade_search_space.silver_operator_id,
+        )
+        return silver_decisions == Decision.KEEP
+
     def recall_threshold_estimation(
         self,
         step: UnoptimizedPhysicalPlanStep,
@@ -533,14 +624,12 @@ class LotusOptimizer(Optimizer):
         assert isinstance(
             cascade_search_space.upper_tuning_param, TuningParameterContinuous
         )
-        silver_op = step.operators[cascade_search_space.silver_operator_id]
-        silver_decisions = self.get_decisions(
+        should_keep_according_to_silver = self.reference_keep_mask(
+            step=step,
             cascade_id=cascade_id,
             level=level,
+            cascade_search_space=cascade_search_space,
             profiling_output=profiling_output,
-            parameters=silver_op.get_default_tuning_parameters(),  # type: ignore
-            operator=silver_op,
-            operator_id=cascade_search_space.silver_operator_id,
         )
 
         proxy_profiler_output = profiling_output.profiler_outputs[
@@ -571,7 +660,6 @@ class LotusOptimizer(Optimizer):
                 operator_id=cascade_search_space.proxy_operator_id,
             )
             possible_to_keep = proxy_decisions != Decision.DISCARD
-            should_keep_according_to_silver = silver_decisions == Decision.KEEP
 
             possible_recall = (
                 (possible_to_keep & should_keep_according_to_silver).float().sum()

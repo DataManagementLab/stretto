@@ -1,0 +1,178 @@
+{
+  "benchmarks": {
+    "artwork_random": {
+      "cached_tables": [
+        "artworks"
+      ],
+      "image_columns": {
+        "artworks.image_url": {
+          "n_items": 65
+        }
+      },
+      "modality": "image",
+      "num_tuples": 65,
+      "split": "dev",
+      "tables": {
+        "artworks": 65
+      },
+      "text_columns": {}
+    },
+    "artwork_random_medium": {
+      "cached_tables": [
+        "artworks"
+      ],
+      "image_columns": {
+        "artworks.image_url": {
+          "n_items": 1000
+        }
+      },
+      "modality": "image",
+      "num_tuples": 1000,
+      "split": "dev",
+      "tables": {
+        "artworks": 1000
+      },
+      "text_columns": {}
+    },
+    "ecommerce_random": {
+      "cached_tables": [
+        "products"
+      ],
+      "image_columns": {
+        "products.product_image": {
+          "n_items": 65
+        }
+      },
+      "modality": "multimodal",
+      "num_tuples": 65,
+      "split": "dev",
+      "tables": {
+        "products": 65
+      },
+      "text_columns": {
+        "products.description": {
+          "max": 874.0,
+          "mean": 204.07692307692307,
+          "median": 204,
+          "n_items": 65,
+          "p95": 457.0
+        }
+      }
+    },
+    "ecommerce_random_large": {
+      "cached_tables": [
+        "products"
+      ],
+      "image_columns": {
+        "products.product_image": {
+          "n_items": 1000
+        }
+      },
+      "modality": "multimodal",
+      "num_tuples": 1000,
+      "split": "dev",
+      "tables": {
+        "products": 1000
+      },
+      "text_columns": {
+        "products.description": {
+          "max": 1289.0,
+          "mean": 191.376,
+          "median": 187.0,
+          "n_items": 1000,
+          "p95": 385.0
+        }
+      }
+    },
+    "email_random": {
+      "cached_tables": [
+        "emails"
+      ],
+      "image_columns": {},
+      "modality": "text",
+      "num_tuples": 1000,
+      "split": "dev",
+      "tables": {
+        "emails": 1000
+      },
+      "text_columns": {
+        "emails.text_path": {
+          "max": 22857.0,
+          "mean": 1124.562,
+          "median": 671.5,
+          "n_items": 1000,
+          "p95": 3462.0
+        }
+      }
+    },
+    "movie_random": {
+      "cached_tables": [
+        "reviews"
+      ],
+      "image_columns": {},
+      "modality": "text",
+      "num_tuples": 1000,
+      "split": "dev",
+      "tables": {
+        "reviews": 1000
+      },
+      "text_columns": {
+        "reviews.reviewtext": {
+          "max": 89.0,
+          "mean": 34.461,
+          "median": 33.0,
+          "n_items": 1000,
+          "p95": 62.0
+        }
+      }
+    },
+    "movie_random_huge": {
+      "cached_tables": [
+        "reviews"
+      ],
+      "image_columns": {},
+      "modality": "text",
+      "num_tuples": 10000,
+      "split": "dev",
+      "tables": {
+        "reviews": 10000
+      },
+      "text_columns": {
+        "reviews.reviewtext": {
+          "max": 95.0,
+          "mean": 29.3064,
+          "median": 29.0,
+          "n_items": 10000,
+          "p95": 51.0
+        }
+      }
+    },
+    "rotowire_random": {
+      "cached_tables": [
+        "reports"
+      ],
+      "image_columns": {},
+      "modality": "text",
+      "num_tuples": 728,
+      "split": "dev",
+      "tables": {
+        "players": 557,
+        "players_to_games": 4699,
+        "reports": 728,
+        "teams": 30,
+        "teams_to_games": 1309
+      },
+      "text_columns": {
+        "reports.report": {
+          "max": 879.0,
+          "mean": 387.48214285714283,
+          "median": 385.0,
+          "n_items": 728,
+          "p95": 677.0
+        }
+      }
+    }
+  },
+  "generated": "2026-09-17",
+  "tokenizer": "meta-llama/Llama-3.1-8B-Instruct"
+}

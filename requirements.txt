@@ -1,12 +1,13 @@
 requests
 tqdm
+psutil
 pandas
 tabulate
-duckdb
-dataclasses
+duckdb==1.3.0
 openai
 pillow
-transformers<=4.53.2
+transformers==5.2.0
+tokenizers==0.22.2
 torch
 torchvision
 pandas-stubs
@@ -15,5 +16,9 @@ flask
 flask-restful
 datasets
 pandasql
+scipy
 librosa
-einops
+matplotlib
+seaborn
+scienceplots
+pyyaml

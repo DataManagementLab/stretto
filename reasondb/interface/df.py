@@ -23,7 +23,6 @@ from reasondb.query_plan.logical_plan import (
     LogicalSorting,
     LogicalLimit,
     LogicalTransform,
-    # LogicalOffset,
 )
 
 import uuid
@@ -41,9 +40,8 @@ class DataFrameInterface(QueryInterface):
         self,
         connection: "RaccoonDB",
         table_name: str,
-        parents: Sequence["DataFrameInterface"],  # parents as links for a linked list
+        parents: Sequence["DataFrameInterface"],  # parent nodes of the plan DAG
         step: LogicalPlanStep,
-        # scope:list = []
     ):
         self.connection = connection
         self.table_name = table_name
@@ -75,8 +73,6 @@ class DataFrameInterface(QueryInterface):
             assert len(prefixes) == len(table_names)
             assert len(prefixes) > 1
 
-            # added set of lines for the condition
-
             # case 1: "join on {sender}"  -> fully-qualify on both sides using expand_delimiter
             repl = expand_delimiter.join([rf"{{{t}.\1}}" for t in table_names])
             cond_exp = re.sub(
@@ -99,14 +95,13 @@ class DataFrameInterface(QueryInterface):
     def filter(self, cond_exp: str) -> "DataFrameInterface":
         if self.parents == []:
             table_in = VirtualTableIdentifier(self.table_name)
-            # table_in = VirtualTableIdentifier("emails")     #table_in = RaccoonDB.database.
         else:
             table_in = self.step.output
 
         table_out = VirtualTableIdentifier(f"{self.table_name}-{str(self.get_uuid())}")
 
         cond_exp = self.make_fully_qualified(cond_exp, [table_in.name])
-        new_step = LogicalFilter(  # self.Step
+        new_step = LogicalFilter(
             explanation=f"Filter the data by: {cond_exp}",
             inputs=[table_in],
             output=table_out,
@@ -123,7 +118,6 @@ class DataFrameInterface(QueryInterface):
     def project(self, cond_exp: str) -> "DataFrameInterface":
         if self.parents == []:
             table_in = VirtualTableIdentifier(self.table_name)
-            # table_in = VirtualTableIdentifier("emails")
         else:
             table_in = self.step.output
 
@@ -145,7 +139,6 @@ class DataFrameInterface(QueryInterface):
         )
 
     def join(self, other: "DataFrameInterface", cond_exp: str) -> "DataFrameInterface":
-        # cond expr uses left and right as default identifier?
         if self.parents == []:
             table_in_left = VirtualTableIdentifier(self.table_name)
         else:
@@ -156,7 +149,6 @@ class DataFrameInterface(QueryInterface):
         else:
             table_in_right = other.step.output
 
-        # new added lines
         left_id = table_in_left.name
         right_id = table_in_right.name
 
@@ -164,11 +156,7 @@ class DataFrameInterface(QueryInterface):
             f"{self.table_name}-{other.table_name}-{str(self.get_uuid())}"
         )
 
-        # new added line
-        # cond = re.sub(r"\{[^}]+\.(\w+)\}", r"{\1}", cond_exp)
         cond = cond_exp.strip()
-
-        # added set of lines for the condition
 
         # case 1: "join on {sender}"  -> fully-qualify on both sides
         m = re.fullmatch(r"join on\s*\{([A-Za-z_]\w*)\}", cond, re.IGNORECASE)
@@ -187,19 +175,16 @@ class DataFrameInterface(QueryInterface):
             flags=re.IGNORECASE,
         )
 
-        # replaced cond_exp with cond in the logicalJoin below
-
-        new_step = LogicalJoin(  # self.Step
+        new_step = LogicalJoin(
             explanation=f"Joins two tables on: {cond}",
             inputs=[table_in_left, table_in_right],
             output=table_out,
-            # expression="{a.sender} = {b.recipient}"
             expression=cond,
         )
 
         return DataFrameInterface(
             connection=self.connection,
-            table_name=self.table_name,  # maintains the tablename of the left table/self -> should make nor difference
+            table_name=self.table_name,  # keep the left table's name
             parents=[self, other],
             step=new_step,
         )
@@ -207,7 +192,6 @@ class DataFrameInterface(QueryInterface):
     def groupby(self, cond_exp: str) -> "DataFrameInterface":
         if self.parents == []:
             table_in = VirtualTableIdentifier(self.table_name)
-            # table_in = VirtualTableIdentifier("emails")
         else:
             table_in = self.step.output
 
@@ -233,7 +217,6 @@ class DataFrameInterface(QueryInterface):
             raise ValueError("Aggregate must follow a groupby operation")
 
         table_in = self.step.output
-        # table_out = VirtualTableIdentifier(table_in.name + "_aggregated")
         table_out = VirtualTableIdentifier(f"{self.table_name}-{str(self.get_uuid())}")
 
         new_step = LogicalAggregate(
@@ -251,11 +234,9 @@ class DataFrameInterface(QueryInterface):
             step=new_step,
         )
 
-    #  raise ValueError("Aggregate must follow a groupby operator")
     def orderby(self, cond_exp: str) -> "DataFrameInterface":
         if self.parents == []:
             table_in = VirtualTableIdentifier(self.table_name)
-            # table_in = VirtualTableIdentifier("emails")
         else:
             table_in = self.step.output
 
@@ -279,7 +260,6 @@ class DataFrameInterface(QueryInterface):
     def limit(self, limit_exp: str) -> "DataFrameInterface":
         if self.parents == []:
             table_in = VirtualTableIdentifier(self.table_name)
-            # table_in = VirtualTableIdentifier("emails")
         else:
             table_in = self.step.output
 
@@ -289,7 +269,7 @@ class DataFrameInterface(QueryInterface):
             explanation=f"Limit the data to: {limit_exp}",
             inputs=[table_in],
             output=table_out,
-            expression=limit_exp,  # func needs int, but logical needs str
+            expression=limit_exp,  # logical plan expects the limit as a string
         )
 
         return DataFrameInterface(
@@ -300,14 +280,12 @@ class DataFrameInterface(QueryInterface):
         )
 
     def offset(self, offset: int) -> "DataFrameInterface":
-        # skipping the first x amount of rows?
-        # logical offset -->> not implemented
+        # Skipping the first `offset` rows is not supported yet.
         raise NotImplementedError("Offset method not implemented")
 
     def extract(self, cond_exp: str) -> "DataFrameInterface":
         if self.parents == []:
             table_in = VirtualTableIdentifier(self.table_name)
-            # table_in = VirtualTableIdentifier("emails")
         else:
             table_in = self.step.output
 
@@ -354,7 +332,6 @@ class DataFrameInterface(QueryInterface):
     def transform(self, cond_exp: str) -> "DataFrameInterface":
         if self.parents == []:
             table_in = VirtualTableIdentifier(self.table_name)
-            # table_in = VirtualTableIdentifier("emails")
         else:
             table_in = self.step.output
 
@@ -376,12 +353,12 @@ class DataFrameInterface(QueryInterface):
         )
 
     def _flatten_plan_(self):
-        # recursivly traverses the parent network to construct a flat list of operations
+        # Recursively traverse the parents to construct a flat list of operations.
 
         if self.parents == []:
             return []
 
-        if isinstance(self.step, LogicalJoin):  # self.Step is LogicalJoin:
+        if isinstance(self.step, LogicalJoin):
             flat_list_0 = self.parents[0]._flatten_plan_()
             flat_list_1 = self.parents[1]._flatten_plan_()
             flat_list = flat_list_0 + flat_list_1
@@ -394,7 +371,7 @@ class DataFrameInterface(QueryInterface):
 
     def execute(self, name, *guarantees: Guarantee) -> "TableInterface":
 
-        # flatten the nexted linked list of parents into a flat list in correct order
+        # Flatten the nested parents into a flat list of steps in execution order.
         plan_steps = self._flatten_plan_()
 
         logical_plan = LogicalPlan(plan_steps)
@@ -420,19 +397,14 @@ class TableInterface(DataFrameInterface):
             self.connection.database,
             ConcreteTable(ConcreteTableIdentifier(name), self.connection.database),
         )
-        # ---
         self.parents: Sequence["DataFrameInterface"] = []
 
-    #  def pprint(self):
-    #  return self.root_table.pprint()
     def pprint(self):
         self.connection.prepare()
-        #  name = getattr(self, "table_name", "unknown")
         print(f"Benchmark {self.table_name}:")
         self.root_table.pprint()
         print("*" * 80)
 
     def to_df(self):
         self.connection.prepare()
-        #  name = getattr(self, "table_name", "unknown")
         return self.root_table.to_df()

@@ -443,6 +443,7 @@ class LogicalPlanStep(PlanStep):
             "LogicalLimit": LogicalLimit,
             "LogicalGroupBy": LogicalGroupBy,
             "LogicalAggregate": LogicalAggregate,
+            "LogicalRename": LogicalRename,
         }
         return classes[json_step["type"]](
             explanation=json_step["explanation"],
@@ -567,6 +568,7 @@ class LogicalJoin(LogicalPlanStep):
                     output=self.output,
                     expression=new_expression,
                     labels=self._labels,
+                    use_join_predicates=True,
                 ),
             ]
         return False, [self]
@@ -582,9 +584,11 @@ class LogicalFilter(LogicalPlanStep):
         output: VirtualTableIdentifier,
         expression: str,
         labels: Optional["LabelsDefinition"] = None,
+        use_join_predicates=False,
     ):
         assert len(inputs) == 1
         super().__init__(explanation, inputs, output, expression, labels)
+        self.use_join_predicates = use_join_predicates
 
     @staticmethod
     def get_can_produce_output_columns() -> bool:

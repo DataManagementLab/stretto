@@ -1,13 +1,10 @@
 from abc import abstractmethod
 from typing import (
-    AsyncGenerator,
     Collection,
-    Dict,
     List,
     Optional,
     Sequence,
     TYPE_CHECKING,
-    Tuple,
 )
 
 
@@ -25,11 +22,10 @@ from reasondb.database.sql import (
     SqlQuery,
 )
 from reasondb.database.database import DataType
-from reasondb.database.table import BaseTable
+from reasondb.database.table import BaseTable, DataIterator
 from reasondb.optimizer.sampler import ProfilingSampleSpecification
 from reasondb.query_plan.query import Query
 from reasondb.utils.logging import FileLogger
-import pandas as pd
 
 
 if TYPE_CHECKING:
@@ -97,7 +93,7 @@ class VirtualTable(BaseTable):
         finalized: bool = False,
         gold_mixing: bool = False,
         logger: FileLogger,
-    ) -> AsyncGenerator[Tuple[Tuple, Dict, pd.Series, float], None]:
+    ) -> DataIterator:
         """Get the data from the table.
         :param limit: The maximum number of rows to return.
         :param offset: The number of rows to skip before returning the data.
@@ -107,17 +103,17 @@ class VirtualTable(BaseTable):
         :param logger: The logger to use for logging.
         :return: The data from the table.
         """
-        async for x in super()._get_data(
+        iterator = await super()._get_data(
             limit=limit,
             offset=offset,
             for_prompt=for_prompt,
             columns=columns,
-            fix_samples=fix_samples,
             finalized=finalized,
+            fix_samples=fix_samples,
             gold_mixing=gold_mixing,
             logger=logger,
-        ):
-            yield x
+        )
+        return iterator
 
     @abstractmethod
     def sql(self) -> SqlQuery:
@@ -211,7 +207,7 @@ class InnerTable(VirtualTable):
         finalized: bool = False,
         gold_mixing: bool = False,
         logger: FileLogger,
-    ) -> AsyncGenerator[pd.Series, None]:
+    ) -> DataIterator:
         """Iterate over the data in the table.
         :param limit: The maximum number of rows to return.
         :param offset: The number of rows to skip before returning the data.
@@ -222,7 +218,6 @@ class InnerTable(VirtualTable):
         """
 
         offset = offset or 0
-        i = 0
 
         sql_str = (
             self._sql.limit(limit)
@@ -234,13 +229,7 @@ class InnerTable(VirtualTable):
                 gold_mixing=gold_mixing,
             )
         )
-        cursor = self._database.sql(sql_str)
-        assert cursor.description is not None
-        column_names = [col[0] for col in cursor.description]
-        while (limit is None or i < limit) and (row := cursor.fetchone()):
-            yield pd.Series(row, index=column_names)
-            offset += 1
-            i += 1
+        return DataIterator(self._database, sql_str)
 
     def positive_len(self, cheat_selective_filter: bool):
         """Get the number of rows that are certainly in the table."""
@@ -343,7 +332,7 @@ class RootTable(VirtualTable):
         finalized: bool = False,
         gold_mixing: bool = False,
         logger: FileLogger,
-    ) -> AsyncGenerator[pd.Series, None]:
+    ) -> DataIterator:
         """Iterate over the data in the table.
         :param limit: The maximum number of rows to return.
         :param offset: The number of rows to skip before returning the data.
@@ -352,7 +341,7 @@ class RootTable(VirtualTable):
         :param logger: The logger to use for logging.
         :return: The data from the table.
         """
-        async for x in self._concrete_table._iter_data(
+        return await self._concrete_table._iter_data(
             limit=limit,
             offset=offset,
             for_prompt=for_prompt,
@@ -360,8 +349,7 @@ class RootTable(VirtualTable):
             fix_samples=fix_samples,
             finalized=finalized,
             gold_mixing=gold_mixing,
-        ):
-            yield x
+        )
 
     def sql(self):
         """Get the SQL query that defines the table."""

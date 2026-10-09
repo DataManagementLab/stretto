@@ -1,12 +1,10 @@
 from typing import (
     TYPE_CHECKING,
-    AsyncGenerator,
     Dict,
     List,
     Optional,
     Sequence,
 )
-import pandas as pd
 
 from reasondb.database.indentifier import (
     ConcreteColumn,
@@ -23,6 +21,7 @@ from reasondb.database.indentifier import (
 )
 from reasondb.database.database import Database
 from reasondb.database.sql import JoinConditionConjuction, JoinConditions, SqlQuery
+from reasondb.database.table import DataIterator
 from reasondb.database.virtual_table import VirtualTable
 from reasondb.optimizer.sampler import ProfilingSampleSpecification
 from reasondb.utils.logging import FileLogger
@@ -235,37 +234,39 @@ class TuningMaterializationPoint(VirtualTable):
         finalized: bool = False,
         gold_mixing: bool = False,
         logger: FileLogger,
-    ) -> AsyncGenerator[pd.Series, None]:
+    ) -> DataIterator:
         project = ", ".join(
             [c.project_str for c in self.index_columns]
             + [str(c) for c in self.concrete_columns]
         )
         if gold_mixing:
-            random_col = (f" , (hash("
+            random_col = (
+                f" , (hash("
                 f"{', '.join(c.col_name for c in self.index_columns)}"
-                f", 42) & 4294967295 )::DOUBLE / 4294967296.0 AS __random__")
+                f", 42) & 4294967295 )::DOUBLE / 4294967296.0 AS __random__"
+            )
             project += random_col
         limit_suffix = f"LIMIT {limit}" if limit is not None else ""
         offset_suffix = f"OFFSET {offset}" if offset is not None else ""
         cond_list = []
         if fix_samples is not None:
-            for i, sample_index in enumerate(fix_samples.index_columns):
-                if sample_index.table_identifier != self.concrete_identifier:
-                    continue
-                cond_list.append(
-                    f"{sample_index.project_no_alias} IN ({', '.join([str(c) for c in fix_samples.index_column_values[str(i)].tolist()])})"
-                )
+            row_conds = []
+            for _, values in fix_samples.index_column_values.iterrows():
+                idx_col_conds = []
+                for sample_index, v in zip(fix_samples.index_columns, values):
+                    if sample_index.table_identifier == self.concrete_identifier:
+                        idx_col_conds.append(f"{sample_index.project_no_alias} == {v}")
+                row_cond = "(" + " AND ".join(idx_col_conds) + ")"
+                row_conds.append(row_cond)
+            fix_sample_cond = "(" + " OR ".join(row_conds) + ")"
+            cond_list.append(fix_sample_cond)
 
         where_suffix = ""
         if len(cond_list) > 0:
             where_suffix = "WHERE (" + ") AND (".join(cond_list) + ")"
 
         sql_str = f"SELECT {project} FROM {self.tmp_table_name} {where_suffix} {limit_suffix} {offset_suffix}".strip()
-        cursor = self._database.sql(sql_str)
-        assert cursor.description is not None
-        column_names = [col[0].lower() for col in cursor.description]
-        while row := cursor.fetchone():
-            yield pd.Series(row, index=column_names)
+        return DataIterator(self._database, sql_str)
 
     def get_original_column(self, col: ConcreteColumnIdentifier) -> ConcreteColumn:
         assert self.is_materialized

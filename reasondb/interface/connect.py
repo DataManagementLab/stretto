@@ -1,4 +1,5 @@
 import asyncio
+import torch
 from pathlib import Path
 from typing import Literal, Optional, Sequence, Union
 from reasondb.database.indentifier import InPlaceColumn, RemoteColumn
@@ -9,18 +10,24 @@ from reasondb.interface.nl import NlQuery
 
 
 class RaccoonDB:
-    def __init__(self, db_name, config: Optional[Config] = None):
+    def __init__(
+        self,
+        db_name,
+        config: Optional[Config] = None,
+        device: torch.device = torch.device("cpu"),
+    ):
         self.db_name = db_name
-        self.config = config or Config(db_name)
+        self.config = config or Config(db_name, device=device)
         if config is not None:
             assert db_name == config.identifier_for_caching
         self._executor: Optional[Executor] = None
+        self.device = device
 
     @property
     def executor(self) -> Executor:
-        assert (
-            self._executor is not None
-        ), "Executor is not initialized. Use 'with RaccoonDB(...) as rc:'."
+        assert self._executor is not None, (
+            "Executor is not initialized. Use 'with RaccoonDB(...) as rc:'."
+        )
         return self._executor
 
     def __enter__(self):
@@ -37,9 +44,9 @@ class RaccoonDB:
 
     @property
     def database(self):
-        assert (
-            self.executor is not None
-        ), "Executor is not initialized. Use 'with RaccoonDB(...) as rc:'."
+        assert self.executor is not None, (
+            "Executor is not initialized. Use 'with RaccoonDB(...) as rc:'."
+        )
         return self.executor.database
 
     def add_table(

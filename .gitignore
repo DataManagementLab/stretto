@@ -22,4 +22,10 @@ tmp_kvcache_plots/
 .devcontainer/
 debug_outputs/
 nohup.out
-scripts/kill_servers.sh
+benchmark_results/
+*_precompute_kv.json
+*_curated_kv.json
+**/figures/
+stretto-final.zip
+# Advisory lock beside the recorded KV cache sizes.
+reasondb/evaluation/kv_cache_sizes.json.lock

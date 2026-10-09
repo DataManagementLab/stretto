@@ -1,6 +1,5 @@
 import asyncio
 import openai
-import psutil
 import base64
 import json
 import time
@@ -13,11 +12,11 @@ from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple
 from openai import NOT_GIVEN, AsyncOpenAI
 
-# from openai.types.chat import ChatCompletionMessageParam
 import hashlib
 
 from reasondb.utils.cache import CACHE_DIR
 from reasondb.utils.logging import FileLogger
+from reasondb.utils.timing import SimulatedClock
 
 
 LLM_CACHE_DIR = CACHE_DIR / Path("llm_cache")
@@ -55,13 +54,6 @@ class LargeLanguageModel(ABC):
     async def close(self):
         pass
 
-    def print_open_files(self):
-        proc = psutil.Process()
-        print("*** Open Files ***")
-        for i, f in enumerate(proc.open_files()):
-            print(f"{i}: {f.path}")
-        print("*** End Open Files ***")
-
     async def invoke_with_runtime_and_cost(
         self,
         prompt: "Prompt",
@@ -82,11 +74,14 @@ class LargeLanguageModel(ABC):
             async with self.semaphore:
                 response, runtime, cost = await self._invoke(prompt, stop=stop)
             async with self.cache_semaphore:
-                # self.print_open_files()
                 self.cache(prompt, response, runtime, cost)
         else:
             response, runtime, cost = cached
             logger.debug(__name__, "Using cached response")
+            # A cached response costs ~no wall-clock, so credit the stored runtime to
+            # the SimulatedClock to keep phase timings comparable to uncached runs
+            # (see utils/timing.py). Fresh API calls are measured by wall-clock.
+            SimulatedClock.add(runtime)
         logger.debug(__name__, f"LLM response: {response}")
         return response, runtime, cost
 
@@ -257,7 +252,6 @@ class Prompt:
 
     @property
     def prompt_messages(self):  # -> List[ChatCompletionMessageParam]:
-        # result: List[ChatCompletionMessageParam] = []
         result = []
         for message in self._messages:
             if message.image is not None:
@@ -296,11 +290,18 @@ class Prompt:
 class OpenAILLM(LargeLanguageModel):
     def __init__(self, model_id, characteristics, cache_enabled: bool):
         super().__init__(model_id, characteristics, cache_enabled)
-        self.api_key = os.environ["OPENAI_API_KEY"]
+        # `.get`, not `[...]`: only *calling* the API requires a key, so operator suites
+        # that contain this model can be constructed and inspected without one.
+        self.api_key = os.environ.get("OPENAI_API_KEY")
         self.client = None
 
     async def prepare(self):
         await super().prepare()
+        assert self.api_key, (
+            "OPENAI_API_KEY is not set, and this LLM is about to be called. It is read at "
+            "construction but only required here: building an operator toolbox to inspect "
+            "it needs no key, issuing a request does."
+        )
         self.client = AsyncOpenAI(api_key=self.api_key)
 
     async def close(self):

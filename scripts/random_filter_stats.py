@@ -1,122 +1,62 @@
+"""Compute one benchmark's filter stats outside the coordinator.
+
+The coordinator normally schedules this as a phase-0 job per benchmark (see
+``reasondb/coordinator/producers/filter_stats_jobs.py``): a ``RandomBenchmark``'s query
+set is sampled from the predicate-overlap matrix it produces, so nothing downstream can be
+enumerated before it. This script regenerates the stats of a single dataset without
+starting a coordinator task.
+
+The work is done by :func:`reasondb.evaluation.filter_stats.run_filter_stats_pass`, which
+needs a ``--precompute`` file to write into: the pass pins the question phrasing and
+records the gold responses into that file, so that later runs ask exactly the prompts the
+matrix describes. Requires the model servers to be up.
+"""
+
 import argparse
-import json
-import numpy as np
 import logging
 from pathlib import Path
 
 from reasondb.evaluation.benchmark import RandomBenchmark
-from reasondb.evaluation.benchmarks.artwork import ArtworkRandom, ArtworkRandomMedium
-from reasondb.evaluation.benchmarks.ecommerce import (
-    EcommerceRandom,
-    EcommerceRandomLarge,
-)
-from reasondb.evaluation.benchmarks.email import EnronEmailRandom
-from reasondb.evaluation.benchmarks.movie import MovieRandom
-from reasondb.evaluation.benchmarks.rotowire import RotowireRandom
-from reasondb.executor import Executor
-from reasondb.interface.config import get_default_configurator
-from reasondb.optimizer.label_optimizer import LabelOptimizer
-from reasondb.query_plan.logical_plan import ALL_LOGICAL_OPERATORS_TOOLBOX
-from reasondb.reasoning.few_shot_database import DUMMY_FEW_SHOT_DATABASE
-from reasondb.reasoning.llm import GPT4o
-from reasondb.reasoning.reasoners.self_correction import SelfCorrectionReasoner
+from reasondb.evaluation.benchmark_registry import RANDOM_BENCHMARKS
+from reasondb.evaluation.filter_stats import run_filter_stats_pass
 
 logger = logging.getLogger(__name__)
 
 
-BENCHMARKS = {
-    # CAESURA
-    "artwork_random": ArtworkRandom,
-    "artwork_random_medium": ArtworkRandomMedium,
-    "rotowire_random": RotowireRandom,
-    "movie_random": MovieRandom,
-    "email_random": EnronEmailRandom,
-    "ecommerce_random": EcommerceRandom,
-    "ecommerce_random_large": EcommerceRandomLarge,
-}
-
-
 def main():
     logging.basicConfig(level=logging.INFO)
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--benchmark",
-        type=str,
-        choices=BENCHMARKS.keys(),
-        default=["artwork_random"],
-        help="The benchmark to run.",
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "--split",
-        type=str,
-        choices=["dev", "test"],
-        default="dev",
-        help="The split of the benchmark to run.",
+        "--benchmark", type=str, choices=sorted(RANDOM_BENCHMARKS), required=True
     )
+    parser.add_argument("--split", type=str, choices=["dev", "test"], default="dev")
     parser.add_argument(
-        "--output-dir", type=Path, default=Path("benchmark_results/filter_stats")
+        "--precompute",
+        type=Path,
+        required=True,
+        metavar="OUTPUT_JSON",
+        help="This dataset's precompute file. Read as well as written: an existing file "
+        "supplies the operator config pins, so a re-run asks the same questions it did "
+        "the first time.",
     )
     args = parser.parse_args()
 
-    logger.info(f"Analyzing benchmarks: {args.benchmark}")
-    benchmark_name = args.benchmark
-
-    result_dir = args.output_dir / benchmark_name / args.split
-    result_dir.mkdir(parents=True, exist_ok=True)
-
-    benchmark_class = BENCHMARKS[benchmark_name]
-    split = args.split
-    print(f"Analyzing benchmark {benchmark_name} on split {split}...")
-    benchmark = benchmark_class.load(split)
-    assert isinstance(benchmark, RandomBenchmark)
-
-    configurator = get_default_configurator()
-    reasoner = SelfCorrectionReasoner(
-        llm=GPT4o(),
-        configurator=configurator,
-        logical_operators=ALL_LOGICAL_OPERATORS_TOOLBOX,
-        few_shot_database=DUMMY_FEW_SHOT_DATABASE,
+    benchmark_cls = RANDOM_BENCHMARKS[args.benchmark]
+    assert issubclass(benchmark_cls, RandomBenchmark), (
+        f"{args.benchmark} is not a RandomBenchmark; only those sample their queries "
+        "from filter stats."
     )
-    executor = Executor(
-        name="silver",
-        database=benchmark.database,
-        reasoner=reasoner,
-        optimizer=LabelOptimizer(),
-        configurator=configurator,
+
+    summary = run_filter_stats_pass(
+        benchmark_cls,
+        args.split,
+        simulate=False,
+        store_path=args.precompute,
+        stats_dir=benchmark_cls.filter_stats_dir(args.split),
     )
-    with executor as e:
-        queries = benchmark.single_filter_queries
-        benchmark_result = e.execute_benchmark(
-            queries,
-            results_cache_dir=result_dir / "cache",
-            reset_db_before_each_query=True,
-        )
-
-    query_to_index = {}
-    all_index = set()
-    for i, (query, df) in enumerate(benchmark_result.results.items()):
-        logger.info(f"{i}) Num results: {len(df)} - Query: {query}")
-        query_to_index[query] = df.index
-        all_index = all_index.union(set(df.index.values))
-    all_index_sorted = sorted(list(all_index))
-    index_to_id = {idx: i for i, idx in enumerate(all_index_sorted)}
-    matrix = np.zeros((len(benchmark_result.results), len(all_index)), dtype=int)
-    query_to_matrix_id = {}
-    matrix_id_to_query = {}
-    for i, (query, df) in enumerate(benchmark_result.results.items()):
-        for idx in df.index.values:
-            matrix_id = index_to_id[idx]
-            matrix[i, matrix_id] = 1
-        query_to_matrix_id[query] = i
-        matrix_id_to_query[i] = query
-
-    output_json = {
-        "overlap_matrix": matrix.tolist(),
-        "predicate_to_matrix_id": query_to_matrix_id,
-        "matrix_id_to_predicate": matrix_id_to_query,
-    }
-    with open(result_dir / "stats.json", "w") as f:
-        json.dump(output_json, f)
+    logger.info("Done: %s", summary)
 
 
 if __name__ == "__main__":

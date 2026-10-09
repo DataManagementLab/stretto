@@ -138,7 +138,6 @@ class Capabilities:
         description="Arbitrary transformation on text, such as translating a text to another language.",
         logical_operator=LogicalTransform,
     )
-    # AUDIO_TRANSFORM ?
     TRADITIONAL_PROJECT = BaseCapability(
         description="Project a subset of columns from a table.",
         logical_operator=LogicalProject,

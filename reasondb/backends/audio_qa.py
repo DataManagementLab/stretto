@@ -2,7 +2,7 @@ from abc import abstractmethod
 import pandas as pd
 from typing import Sequence, Tuple
 
-from reasondb.backends.backend import Backend
+from reasondb.backends.backend import Backend, totals_over_distinct
 from reasondb.backends.audio_model import AudioModel
 from reasondb.database.indentifier import (
     ConcreteColumn,
@@ -105,14 +105,14 @@ class AudioModelAudioQABackend(AudioQaBackend):
         )
         responses = [r.response for r in response_items]
         log_odds = [r.log_odds for r in response_items]
-        runtimes = [r.runtime for r in response_items]
-        costs = [r.cost for r in response_items]
 
         result = [
-            (data_id, resp, lo)  # data_type.convert(resp)
+            (data_id, resp, lo)
             for data_id, resp, lo in zip(data_ids, responses, log_odds)
         ]
-        return result, sum(runtimes), sum(costs)
+        # Per distinct clip, matching `AudioModel.invoke`'s own dedup.
+        # See `totals_over_distinct`.
+        return result, *totals_over_distinct(audio_paths, response_items)
 
     def get_operation_identifier(self) -> str:
         return f"AudioQABackend-{self.audio_model.model_id}"

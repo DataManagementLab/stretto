@@ -137,9 +137,12 @@ class TunedPipeline(PhysicalPlan):
                 observation=observation,
                 database=intermediate_state,
             )
-        return TraditionalTunedPipeline(
-            final_sql, steps=traditional_section.steps_in_order
-        )
+        # The TunedPipelineStep-s just built, not traditional_section.steps_in_order.
+        # Those are UnoptimizedPhysicalPlanStep-s, whose to_json() emits the *search
+        # space* shape ({logical_plan_step, available_operators}) rather than the picked
+        # step ({operator, operator_config, tuning_parameters, inputs, output}) that
+        # consumers of a tuned pipeline expect.
+        return TraditionalTunedPipeline(final_sql, steps=tuned_pipeline.plan_steps)
 
     @staticmethod
     async def from_aggregation_section(
@@ -451,9 +454,23 @@ class MultiModalTunedPipeline(TunedPipeline):
         tuned_pipleline = MultiModalTunedPipeline()
         result = [intermediate_state]
         final_sql = None
-        for step, observation in zip(self._plan_steps, self.observations):
+        for step_idx, (step, observation) in enumerate(
+            zip(self._plan_steps, self.observations)
+        ):
             input_sqls = [sqls[tbl] for tbl in step.inputs]
-            output_sql = observation.get_sql(input_sqls)
+            try:
+                output_sql = observation.get_sql(input_sqls)
+            except Exception as exc:
+                # The traceback alone points at the SQL layer, not at the plan step
+                # that asked for it, so name the step in a note. `add_note` keeps the
+                # original exception type and traceback intact.
+                exc.add_note(
+                    f"while building SQL for plan step {step_idx} of "
+                    f"{len(self._plan_steps)}: "
+                    f"{step.operator.get_operation_identifier()} "
+                    f"inputs={[str(t) for t in step.inputs]} output={step.output}"
+                )
+                raise
             sqls[step.output] = output_sql
             intermediate_state = tuned_pipleline.append(
                 step=step,
@@ -498,7 +515,7 @@ class MultiModalTunedPipeline(TunedPipeline):
         database_state: "IntermediateState",
         logger: FileLogger,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        data_iterator = output_table.get_data(
+        data_iterator = await output_table.get_data(
             limit=None,
             offset=0,
             logger=logger,
@@ -509,10 +526,8 @@ class MultiModalTunedPipeline(TunedPipeline):
         (
             data_df,
             flags_df,
-        ) = await database_state.data_iterator_to_dataframe_with_flags(
-            data_iterator=data_iterator,
+        ) = data_iterator.to_df_with_flags(
             index_columns=output_table.index_columns,
-            logger=logger,
         )
         return (data_df, flags_df)
 
@@ -585,7 +600,7 @@ class MultiModalTunedPipeline(TunedPipeline):
                 for tbl, data_list in step_input_data.items()
             }
 
-            # prepaere sure / unsure data
+            # prepare sure / unsure data
             sure_masks = {
                 tbl: step_input_data_concatenated[tbl][1][
                     step.logical_plan_step.identifier
@@ -619,7 +634,7 @@ class MultiModalTunedPipeline(TunedPipeline):
             if all(len(data) > 0 for data in input_data_unsure):
                 operator = step.operator
                 observation = observations[step_idx]
-                run_result = await operator.run_outside_db(  
+                run_result = await operator.run_outside_db(
                     inputs=step.inputs,
                     input_data=input_data_unsure,
                     llm_parameters=step.llm_parameters,
@@ -639,7 +654,7 @@ class MultiModalTunedPipeline(TunedPipeline):
                 )
 
                 # merge sure data back
-                assert len(input_data_sure) == 1  
+                assert len(input_data_sure) == 1
                 if len(input_data_sure[0]) == 0:
                     output_data_merged = output_data
                     if not isinstance(output_data_merged.index, pd.MultiIndex):
@@ -652,7 +667,7 @@ class MultiModalTunedPipeline(TunedPipeline):
                         [output_data, input_data_sure[0]]
                     ).sort_index()
 
-                assert len(step.inputs) == 1  
+                assert len(step.inputs) == 1
                 output_sure_mask_merged = (
                     step_input_data_concatenated[step.inputs[0]][1]
                     .loc[output_data_merged.index]
@@ -662,7 +677,7 @@ class MultiModalTunedPipeline(TunedPipeline):
                     output_sure_mask.index, step.logical_plan_step.identifier
                 ] = output_sure_mask
             else:
-                assert len(input_data_sure) == 1  
+                assert len(input_data_sure) == 1
                 output_data_merged = input_data_sure[0]
                 output_sure_mask_merged = (
                     step_input_data_concatenated[step.inputs[0]][1]
@@ -671,6 +686,14 @@ class MultiModalTunedPipeline(TunedPipeline):
                 )
 
             assert (output_data_merged.index == output_sure_mask_merged.index).all()
+
+            if self.is_last_tier_for_its_logical_step(step_idx, run_outside_steps):
+                output_data_merged, output_sure_mask_merged = self.discard_unsure(
+                    step=step,
+                    output_data=output_data_merged,
+                    sure_mask=output_sure_mask_merged,
+                    logger=logger,
+                )
 
             # write output data
             if len(output_data_merged) == 0:
@@ -683,6 +706,61 @@ class MultiModalTunedPipeline(TunedPipeline):
                 __name__,
                 f"Finished running step {step_idx} ({step.to_json()}) outside DB for one batch. Cost for step so far: {collected_costs[step_idx]}",
             )
+
+    @staticmethod
+    def is_last_tier_for_its_logical_step(
+        step_idx: int, run_outside_steps: Sequence[TunedPipelineStep]
+    ) -> bool:
+        """Whether no later step will re-decide the tuples this one leaves unsure.
+
+        A logical operator is executed as a cascade of tiers -- several
+        ``TunedPipelineStep``s sharing one ``logical_plan_step.identifier``, each
+        re-deciding only what the previous one flagged unsure (see the ``sure_masks``
+        split above). ``run_outside_steps`` is the tail of the plan, so the last
+        occurrence of an identifier here is that logical operator's final tier.
+        """
+        identifier = run_outside_steps[step_idx].logical_plan_step.identifier
+        return not any(
+            later.logical_plan_step.identifier == identifier
+            for later in run_outside_steps[step_idx + 1 :]
+        )
+
+    @staticmethod
+    def discard_unsure(
+        step: TunedPipelineStep,
+        output_data: pd.DataFrame,
+        sure_mask: pd.DataFrame,
+        logger: FileLogger,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Drop rows this logical operator never reached a verdict on.
+
+        One rule, obeyed by all three paths: **an unsure verdict that no further tier of
+        the same logical step will re-decide is a DISCARD.**
+
+        The differentiable model
+        (``SimulatedPipelinePass.get_final_keep_probabilities`` returns only the KEEP
+        mass, so residual unsure counts against recall) and the in-database path
+        (``SqlQuery.get_cond_list_select`` emits a step's non-final conditions *soft*, at
+        ``> threshold_lower``, and hardens the last one to ``> threshold_upper`` when
+        finalized) implement it implicitly. Here, ``transform_input`` returns everything
+        above the *lower* threshold -- keep and unsure alike -- for the next tier to sort
+        out, so rows still unsure after the final tier are dropped explicitly.
+
+        This matters whenever the final tier's thresholds are tuned, so that its unsure
+        band has non-zero width.
+        """
+        identifier = step.logical_plan_step.identifier
+        if identifier not in sure_mask.columns:
+            return output_data, sure_mask
+        decided = sure_mask[identifier].astype(bool)
+        if decided.all():
+            return output_data, sure_mask
+        logger.info(
+            __name__,
+            f"Discarding {(~decided).sum()} of {len(decided)} rows that step "
+            f"{identifier} left unsure with no further tier to decide them.",
+        )
+        return output_data[decided.values], sure_mask[decided.values]
 
     def get_run_outside_step_parents(
         self, run_outside_steps: Sequence[TunedPipelineStep]
@@ -798,10 +876,22 @@ class MultiModalTunedPipeline(TunedPipeline):
             final_data, final_flags = zip(*final_results[final_name])
             final_data = pd.concat(final_data).sort_index()
             final_flags = pd.concat(final_flags).sort_index()
-            if not final_flags.all().all():
+            # Catch-all for the same rule `discard_unsure` enforces per logical step: a
+            # row nobody reached a verdict on is not a match. `execute_run_outside_step`
+            # should already have dropped every such row, so this normally removes
+            # nothing.
+            decided = final_flags.drop(columns=["_random_id"], errors="ignore").all(
+                axis=1
+            )
+            if not decided.all():
                 logger.warning(
-                    __name__, "For some elements it's not sure how to classify them"
+                    __name__,
+                    f"Discarding {(~decided).sum()} row(s) left unsure by some step with "
+                    "no tier behind it to decide them. This should have been handled "
+                    "per-step; see MultiModalTunedPipeline.discard_unsure.",
                 )
+                final_data = final_data[decided.values]
+                final_flags = final_flags[decided.values]
         else:
             index_col_names = [c.col_name for c in final_sql.get_index_columns()]
             index = pd.MultiIndex.from_tuples([], names=index_col_names)
@@ -810,7 +900,6 @@ class MultiModalTunedPipeline(TunedPipeline):
                 columns=[col.alias for col in original_concrete_columns],
                 index=index,
             )
-            print()
 
         result_data = ResultData(
             df=final_data,
@@ -820,30 +909,6 @@ class MultiModalTunedPipeline(TunedPipeline):
             execution_cost=costs,
         )
         return result_data
-
-        # indexes = list(range(len(self._plan_steps)))
-        # sqls = {v.identifier: v.sql() for v in intermediate_state.virtual_tables}
-        # final_sql = None
-        # for i, step, observation in zip(indexes, self._plan_steps, self.observations):
-        #     input_sqls = [sqls[tbl] for tbl in step.inputs]
-        #     output_sql = observation.get_sql(input_sqls)
-        #     sqls[step.output] = output_sql
-        #     plan_prefix = self[:i]
-        #     assert isinstance(plan_prefix, MultiModalTunedPipeline)
-        #     intermediate_state._plan_prefix = plan_prefix
-        #     intermediate_state._tables = None
-        #     await step.potentially_run_outside_db(
-        #         observation=observation,
-        #         llm_parameters=step.llm_parameters,
-        #         database_state=intermediate_state,
-        #         logger=logger,
-        #         limit=300,  
-        #     )
-        #     final_sql = output_sql
-        # assert final_sql is not None
-        # intermediate_state._plan_prefix = None
-        # intermediate_state._tables = None
-        # return final_sql
 
     @property
     def virtual_columns(self) -> Sequence[VirtualColumnIdentifier]:

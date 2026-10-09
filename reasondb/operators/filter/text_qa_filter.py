@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Any, Callable, Dict, Optional, Sequence, Type
 import pandas as pd
 import torch
@@ -26,6 +27,7 @@ from reasondb.query_plan.llm_parameters import (
 )
 from reasondb.query_plan.logical_plan import LogicalFilter, LogicalPlanStep
 from reasondb.query_plan.physical_operator import (
+    FilterMode,
     PhysicalOperator,
     ProfilingCost,
     RunOutsideResult,
@@ -58,7 +60,11 @@ class TextQaFilter(PhysicalOperator):
     ):
         self.text_qa_backend = text_qa_backend
         self.batch_size = 5
+        self.mode = None
         super().__init__(quality=quality, fake_cost=fake_cost)
+
+    def set_mode(self, mode: FilterMode):
+        self.mode = mode
 
     async def get_observation(
         self,
@@ -189,6 +195,9 @@ class TextQaFilter(PhysicalOperator):
     def prefers_run_outside_db(self) -> bool:
         return True
 
+    def get_modality(self) -> str:
+        return "text"
+
     async def _run_outside_db(
         self,
         inputs: Sequence[VirtualTableIdentifier],
@@ -199,24 +208,70 @@ class TextQaFilter(PhysicalOperator):
         labels: Optional["LabelsDefinition"],
         logger: FileLogger,
     ):
+        import time as _time
+
+        t_pre = _time.time()
+
         (question_template, columns, context_column, keep_answer) = self.get_params(
             llm_parameters, inputs
         )
 
-        answers, runtime, cost = await self.text_qa_backend.run(
-            question_template=question_template,
-            columns=columns,
-            context_column_virtual=context_column,
-            context_column_concrete=database_state.get_concrete_column_from_virtual(
-                context_column, avoid_materialization_points=True
-            ),
-            data=input_data,
-            data_type=DataType.STRING,
-            cache_dir=database_state.cache_dir,
-            boolean_question=True,
-            logger=logger / "text-qa-filter",
+        placeholder_columns = [c for c in columns if c != context_column]
+        is_join = len(placeholder_columns) > 0
+
+        context_column_concrete = database_state.get_concrete_column_from_virtual(
+            context_column, avoid_materialization_points=True
         )
+
+        if is_join:
+            unique_contexts = input_data[context_column.column_name].nunique()
+            logger.info(
+                __name__,
+                f"TextQaFilter: join mode — {len(input_data)} pairs, "
+                f"{unique_contexts} unique contexts starting...",
+            )
+            t_overhead_pre = _time.time() - t_pre
+            t0 = _time.time()
+            answers, runtime, cost = await self.text_qa_backend.run_join(
+                question_template=question_template,
+                columns=placeholder_columns,
+                context_column_virtual=context_column,
+                context_column_concrete=context_column_concrete,
+                data=input_data,
+                data_type=DataType.STRING,
+                cache_dir=database_state.cache_dir,
+                boolean_question=True,
+                logger=logger / "text-qa-join",
+            )
+            logger.info(
+                __name__,
+                f"TextQaFilter: join done in {_time.time() - t0:.1f}s, {len(answers)} answers",
+            )
+        else:
+            logger.info(
+                __name__,
+                f"TextQaFilter: filter mode — {len(input_data)} rows starting...",
+            )
+            t_overhead_pre = _time.time() - t_pre
+            t0 = _time.time()
+            answers, runtime, cost = await self.text_qa_backend.run(
+                question_template=question_template,
+                columns=columns,
+                context_column_virtual=context_column,
+                context_column_concrete=context_column_concrete,
+                data=input_data,
+                data_type=DataType.STRING,
+                cache_dir=database_state.cache_dir,
+                boolean_question=True,
+                logger=logger / "text-qa-filter",
+            )
+            logger.info(
+                __name__,
+                f"TextQaFilter: filter done in {_time.time() - t0:.1f}s, {len(answers)} answers",
+            )
+        t_post = _time.time()
         keep_answer_alternative = "1" if keep_answer.lower() == "yes" else "0"
+        inverse = keep_answer.lower() == "no"
         mask = [
             (
                 data_id,
@@ -227,10 +282,13 @@ class TextQaFilter(PhysicalOperator):
                     .startswith(keep_answer_alternative.lower())
                 )
                 if not self.text_qa_backend.returns_log_odds
-                else log_odds,
+                else (log_odds if not inverse else -log_odds),
             )
             for data_id, answer, log_odds in answers
         ]
+        t_overhead_post = _time.time() - t_post
+
+        runtime = t_overhead_pre + runtime + t_overhead_post
         return RunOutsideResult(
             mask,
             ProfilingCost(runtime=runtime, monetary_cost=cost),
@@ -275,7 +333,19 @@ class TextQaFilter(PhysicalOperator):
                         num_placeholders="*",
                         dtypes=DataTypes.TRADITIONAL | DataTypes.TEXT,
                     ),
-                    explanation="Template of a binary (yes/no) question to ask for each row in the data. Avoid negation in the question. Can include placeholders for column values. For instance: 'Is {country} in Europe?. 'Should not contain a placeholder for the context column (next parameter).",
+                    explanation=(
+                        "Template of a binary (yes/no) question to ask for each row in the data. "
+                        "Avoid negation in the question. "
+                        "IMPORTANT: Must NOT include a placeholder for the context column (next parameter) — "
+                        "the context is already provided separately and including it again would duplicate it. "
+                        "The template should only reference other (non-context) columns. "
+                        "For instance 'Does this story have the same main character as {other_story}?' (assuming the first story is given as context)"
+                    )
+                    if self.mode == FilterMode.JOIN_PREDICATE
+                    else (
+                        "Template of a binary (yes/no) question to ask for each row in the data. Avoid negation in the question. Can include placeholders for column values. "
+                        "For instance: 'Is {country} in Europe?. 'Should not contain a placeholder for the context column (next parameter)."
+                    ),
                     optional=False,
                     free_form=True,
                     from_logical_plan=FROM_LOGICAL_PLAN.INPUT_COLUMNS,

@@ -24,11 +24,18 @@ from reasondb.utils.logging import FileLogger
 
 class LabelOptimizer(Optimizer):
     """
-    An optimizer that uses gradient descent to optimize pick operators and tune parameters.
+    An optimizer that runs the highest-quality executable operator of every step
+    without profiling or tuning (e.g. to produce silver labels).
     """
 
-    def __init__(self):
+    def __init__(self, reorder: bool = True):
+        """*reorder*: whether to apply the pushdown ordering in :meth:`reorder`.
+
+        False leaves the plan in the order the logical plan gave it, which serves as
+        the baseline that Stretto's DP reordering is compared against.
+        """
         super().__init__()
+        self.reorder_steps_enabled = reorder
 
     async def tune_pipeline(
         self,
@@ -47,11 +54,21 @@ class LabelOptimizer(Optimizer):
             collected_observations=collected_observations,
             logger=logger,
         )
-        optimized_pipeline = self.reorder(
-            pipeline=tuned_pipeline,
-            dependencies=pipeline.dependencies,
-            database=intermediate_state.database,
-        )
+        if self.reorder_steps_enabled:
+            optimized_pipeline = self.reorder(
+                pipeline=tuned_pipeline,
+                dependencies=pipeline.dependencies,
+                database=intermediate_state.database,
+            )
+        else:
+            # The identity permutation rather than `tuned_pipeline` itself:
+            # `reorder_steps` is what turns a MultiModalTunedPipeline into the
+            # TunedPipeline the executor runs (see `NoOpReorderer`).
+            optimized_pipeline = Reorderer.reorder_steps(
+                tuned_pipeline,
+                range(len(tuned_pipeline.plan_steps)),
+                intermediate_state.database,
+            )
         return optimized_pipeline, ProfilingCost(0.0, 0.0)
 
     def reorder(
@@ -97,7 +114,10 @@ class LabelOptimizer(Optimizer):
         for cascade_id, cascade in enumerate(pipeline.steps_in_parallel):
             level_state = intermediate_state
             for level, step in enumerate(cascade):
-                operator_id = len(step.operators) - 1
+                # The last *executable* operator, not simply the last one. An attached
+                # label operator would sit in the final slot, and running it here would
+                # emit ground-truth answers instead of silver labels.
+                operator_id = step.get_last_executable_operator_index()
                 operator = step.operators[operator_id]
 
                 llm_parameters = step.llm_configurations[
@@ -142,7 +162,8 @@ class LabelOptimizer(Optimizer):
         ) in pipeline.steps_in_order_with_ids:
             added_a_operator = False
 
-            operator_id = len(unoptimized_step.operators) - 1
+            # See `collect_observations`: never the label operator.
+            operator_id = unoptimized_step.get_last_executable_operator_index()
             operator = unoptimized_step.operators[operator_id]
 
             tuning_parameters = operator.get_default_tuning_parameters()
@@ -174,7 +195,6 @@ class LabelOptimizer(Optimizer):
                 database=intermediate_state,
             )
             added_a_operator = True
-        # tuned_pipeline.validate(intermediate_state)
         return tuned_pipeline
 
     def get_sampler(self) -> Sampler:

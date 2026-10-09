@@ -18,7 +18,7 @@ from reasondb.optimizer.decision import Decision
 from reasondb.optimizer.guarantees import Guarantee
 from reasondb.optimizer.profiler import Profiler, ProfilingOutput
 from reasondb.optimizer.reorderer import BasicReorderer
-from reasondb.optimizer.sampler import UniformSampler, DEFAULT_SAMPLE_BUDGET
+from reasondb.optimizer.sampler import UniformSampler, DEFAULT_SAMPLE_SIZE
 from reasondb.query_plan.optimized_physical_plan import (
     MultiModalTunedPipeline,
     TunedPipeline,
@@ -568,15 +568,15 @@ class ParetoCascades(Optimizer):
     def __init__(
         self,
         cost_type: CostType,
-        sample_budget: Callable[[int], int] = DEFAULT_SAMPLE_BUDGET,
+        sample_size: int = DEFAULT_SAMPLE_SIZE,
     ):
         super().__init__()
         self.rng = np.random.default_rng(42)
         self.cost_type = cost_type
-        self.sample_budget = sample_budget
+        self.sample_size = sample_size
 
     def get_sampler(self) -> "Sampler":
-        return UniformSampler(sample_budget=self.sample_budget, sample_size=None)
+        return UniformSampler(sample_size=self.sample_size, batch_size=None)
 
     def get_profiler(self):
         assert self.database is not None
@@ -615,38 +615,13 @@ class ParetoCascades(Optimizer):
             sample=sample,
             logger=logger,
         )
-        operator_stats = self.get_operator_stats(
-            profiling_output=profiling_output,
-            pipeline=pipeline,
-            level=0,
-        )
-        mapping = {
-            i: (cascade_id, lvl)
-            for i, (cascade_id, lvl, _) in enumerate(pipeline.steps_in_order_with_ids)
-        }
-        rephrased_dependencies = {
-            mapping[i]: {mapping[dep] for dep in deps}
-            for i, deps in enumerate(pipeline.dependencies)
-        }
-
-        final_pareto = self.abacus_optimize(operator_stats, rephrased_dependencies)
+        final_pareto = self.abacus_optimize(profiling_output, pipeline)
         fallback = (
             (final_pareto.data.isnan() | (final_pareto.data == float("inf")))
             .any(dim=1)
             .all()
         )
         assert not fallback, "Abacus optimizer failed to find a valid plan."
-        # if fallback:
-        #     (optimized_pipeline, _, _, _) = await self.fallback_pipeline(
-        #         pipeline=pipeline,
-        #         intermediate_state=intermediate_state,
-        #         profiling_output=profiling_output,
-        #         dependencies=pipeline.dependencies,
-        #         selectivities=None,
-        #         cost_type=self.cost_type,
-        #         logger=logger,
-        #     )
-        # else:
         precision_target, recall_target, _, _ = Guarantee.parse_targets(guarantees)
         best_operators = self.get_best_operators(
             final_pareto, precision_target, recall_target
@@ -741,7 +716,6 @@ class ParetoCascades(Optimizer):
                 )
                 added_a_operator = True
                 old_index_to_new_indexes[level].add(len(tuned_pipeline.plan_steps) - 1)
-        # tuned_pipeline.validate(intermediate_state)
         order = [
             current_order[cascade_id, level, operator_id]
             for cascade_id, level, operator_id in best_operators
@@ -767,7 +741,76 @@ class ParetoCascades(Optimizer):
         operators = tuple([pe.physical_operator_id for pe in physical_expressions])
         return operators
 
+    def get_best_operators_pareto_points(
+        self,
+        final_pareto: VectorizedStats,
+        precision_target: float,
+        recall_target: float,
+        num_points: int = 3,
+    ) -> List[Tuple[Tuple[int, int, int], ...]]:
+        """Extract up to `num_points` operator-choice plans from the Abacus
+        pareto frontier: the cheapest plan meeting (precision_target,
+        recall_target) -- same plan `get_best_operators` would return -- plus
+        its nearest neighbors on the frontier ordered by raw cost (which,
+        being non-dominated points, tracks quality: cheaper neighbors trade
+        away precision/recall, pricier ones buy more). Neighbors are taken
+        alternately below and above the target (-1, +1, -2, +2, ...) so the
+        result is centered on it, giving a spread of operating points rather
+        than a single one.
+        """
+        precisions = final_pareto.get_metric_data("precision") * -1
+        recalls = final_pareto.get_metric_data("recall") * -1
+        costs = final_pareto.get_metric_data("cost")
+
+        precision_mask = precisions > precision_target
+        recall_mask = recalls > recall_target
+        mask = precision_mask & recall_mask
+        adjusted_costs = costs + ((~mask) * 100_000)
+        target_idx = int(adjusted_costs.argmin().item())
+
+        order = torch.argsort(costs).tolist()
+        target_pos = order.index(target_idx)
+
+        offsets = [0]
+        step = 1
+        while len(offsets) < max(1, num_points):
+            offsets.append(-step)
+            if len(offsets) < num_points:
+                offsets.append(step)
+            step += 1
+
+        plans = []
+        for offset in offsets:
+            pos = target_pos + offset
+            if pos < 0 or pos >= len(order):
+                continue
+            physical_expressions = final_pareto.op_keys[order[pos]]
+            plans.append(
+                tuple(pe.physical_operator_id for pe in physical_expressions)
+            )
+        return plans
+
     def abacus_optimize(
+        self,
+        profiling_output: ProfilingOutput,
+        pipeline: TuningPipeline,
+    ):
+        operator_stats = self.get_operator_stats(
+            profiling_output=profiling_output,
+            pipeline=pipeline,
+            level=0,
+        )
+        mapping = {
+            i: (cascade_id, lvl)
+            for i, (cascade_id, lvl, _) in enumerate(pipeline.steps_in_order_with_ids)
+        }
+        rephrased_dependencies = {
+            mapping[i]: {mapping[dep] for dep in deps}
+            for i, deps in enumerate(pipeline.dependencies)
+        }
+        return self._optimize_from_stats(operator_stats, rephrased_dependencies)
+
+    def _optimize_from_stats(
         self,
         op_stats: Dict[Tuple[int, int, int], Dict[str, float]],
         dependencies: Dict[Tuple[int, int], Set[Tuple[int, int]]],
@@ -827,7 +870,15 @@ class ParetoCascades(Optimizer):
         for cascade_id, cascade in enumerate(pipeline.steps_in_parallel):
             index = profiling_output.merged_output_tuples[cascade_id, level].index
             step = cascade[level]
+            # When the step's labels come from a human, the highest-quality *model* is an
+            # ordinary candidate: its accuracy is measured against those labels below
+            # rather than assumed to be 1.0.
+            gold_operator_id = step.get_last_executable_operator_index()
             for operator_id, op in enumerate(step.operators):
+                if getattr(op, "is_label_only", False):
+                    # Never a candidate: the pareto frontier feeds
+                    # `get_optimized_pipeline`, and a label operator cannot be executed.
+                    continue
                 try:
                     profile_output = profiling_output.get(
                         cascade_id, level, operator_id
@@ -870,7 +921,13 @@ class ParetoCascades(Optimizer):
                     cascade_id, level, operator_id
                 ].get_cost(self.cost_type)
 
-                is_gold = operator_id == len(step.operators) - 1
+                # The gold operator's accuracy is asserted, not measured, since it is the
+                # reference the labels came from. With a human label source,
+                # `gold_operator_id` is a model like any other and is measured.
+                is_gold = (
+                    operator_id == gold_operator_id
+                    and step.get_label_operator_index() is None
+                )
                 stats[cascade_id, level, operator_id] = {
                     "precision": precision.item() if not is_gold else 1.0,
                     "recall": recall.item() if not is_gold else 1.0,

@@ -82,6 +82,9 @@ class Query:
         return {
             "query": self.query,
             "_ground_truth_logical_plan": gt_logical_plan,
+            # The shape statistics (num_semops etc.) set by QueryShape.instantiate,
+            # serialized so they survive a round trip through queries.json.
+            "additional_info": self.additional_info,
         }
 
     @staticmethod
@@ -95,6 +98,8 @@ class Query:
         return Query(
             query=json_query["query"],
             _ground_truth_logical_plan=gt_logical_plan,
+            # May be absent in older query files.
+            additional_info=json_query.get("additional_info"),
         )
 
 
@@ -111,13 +116,22 @@ class OperatorOption:
     expression: str
 
     def rename(
-        self, table_renamings: Dict[VirtualTableIdentifier, VirtualTableIdentifier]
+        self,
+        table_renamings: Dict[VirtualTableIdentifier, VirtualTableIdentifier],
+        inputs: Sequence[VirtualTableIdentifier],
     ) -> "OperatorOption":
         expression = self.expression
         for from_tbl, to_tbl in table_renamings.items():
             expression = re.sub(
                 rf"{{{from_tbl}\.([a-z_][a-z0-9_]*)}}",
                 f"{{{to_tbl}.\\1}}",
+                expression,
+            )
+
+        for i, inpt in enumerate(inputs):
+            expression = re.sub(
+                rf"{{\:{i}\:\.([a-z_][a-z0-9_]*)}}",
+                rf"{{{inpt.name}.\1}}",
                 expression,
             )
         return OperatorOption(
@@ -147,9 +161,18 @@ class QueryShape:
         self,
         *shape: Union[OperatorPlaceholder, LogicalPlanStep, RandomOrder],
         additional_info: Optional[Dict] = None,
+        queries_kept: Optional[int] = None,
     ):
         self.shape = shape
         self.additional_info = additional_info or {}
+        #: How many of this shape's drawn queries to keep, or None for all of them.
+        #: Narrower than ``RandomBenchmark.queries_kept_per_shape``, which applies the
+        #: same cap to every shape - a shape whose queries are individually expensive
+        #: (a self-join crosses 10^4 rows with 10^4) can be thinned without touching the
+        #: rest of the set. Every query is still *drawn*, so the shared RNG stream is
+        #: untouched and the kept queries are a prefix, hence a subset of what a
+        #: ``--precompute`` pass recorded (unlike lowering ``num_queries_per_shape``).
+        self.queries_kept = queries_kept
 
     def get_required_operators_per_type(self) -> Dict[Type[LogicalPlanStep], int]:
         operator_count = {}
@@ -195,7 +218,9 @@ class QueryShape:
                 count = opertor_counts[operator_type]
                 opertor_counts[operator_type] += 1
                 operator_option = operators[operator_type][count]
-                operator_option = operator_option.rename(table_renamings)
+                operator_option = operator_option.rename(
+                    table_renamings, placeholder.inputs
+                )
                 new_step = operator_type(
                     inputs=list(placeholder.inputs),
                     output=placeholder.output,

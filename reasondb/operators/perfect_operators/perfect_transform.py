@@ -34,6 +34,10 @@ from reasondb.utils.logging import FileLogger
 
 
 class PerfectTransform(PhysicalOperator):
+    # Marked for consistency with the other perfect operators; it is not supported as a
+    # label source since `get_observation`, `_run_outside_db` and `profile` are unimplemented.
+    is_label_only = True
+
     async def get_observation(
         self,
         database_state: IntermediateState,
@@ -46,24 +50,6 @@ class PerfectTransform(PhysicalOperator):
         logger: FileLogger,
     ) -> Observation:
         raise NotImplementedError("PerfectTransform cannot be used in get_observation")
-        # assert len(output_columns) == 1
-        # output_hidden_cols = await database_state.get_output_hidden_cols(
-        #     operation=self,
-        #     llm_configuration=llm_parameters,
-        #     dependent_columns=llm_parameters["__expression__"].column_mentions(),
-        #     logger=logger / "get-skip-columns",
-        #     database_state=database_state,
-        #     data_type=data_type,
-        # )
-
-        # assert output_hidden_cols.supplementary_column is not None
-
-        # return ExtractObservation(
-        #     new_column=VirtualColumn(output_columns[0].name, data_type),
-        #     output_hidden_columns=output_hidden_cols,
-        #     logical_plan_step=logical_plan_step,
-        #     quality=self.quality,
-        # )
 
     @property
     def prefers_run_outside_db(self) -> bool:

@@ -26,6 +26,53 @@ if TYPE_CHECKING:
     from reasondb.database.intermediate_state import IntermediateState
 
 
+def require_template_placeholders(
+    template: str,
+    parameter_name: str,
+    placeholders: Sequence[str],
+    prompt_shape: str,
+    example: str,
+) -> None:
+    """Reject a free-form question template that ignores the values it is handed.
+
+    ``str.format`` returns a template that contains no fields *unchanged* and without
+    complaint, so a template that never mentions its placeholders silently turns a
+    per-pair join predicate into a single constant question: every pair is scored
+    identically, and the filter degenerates into "keep every pair" or "keep no pair"
+    depending on which side of the tuned threshold that one answer lands. Nothing
+    downstream can tell that apart from a genuinely very (un)selective predicate.
+
+    Raising a :class:`Mistake` instead sends the configurator back to the LLM with the
+    correction (``configurator.py`` catches it around ``get_observation`` and re-prompts
+    the same step), so this must be called from a path that runs during configuration.
+
+    ``prompt_shape`` is the caller's own one-sentence description of how the extracted
+    values reach the model, so the feedback cannot contradict the parameter explanation
+    that operator gave the LLM. For both join operators the filled-in template is the
+    entire prompt and the context is empty, so *every* placeholder is required.
+    """
+    missing = [p for p in placeholders if "{" + p + "}" not in template]
+    if missing:
+        named = ", ".join("{" + p + "}" for p in missing)
+        raise Mistake(
+            f"The {parameter_name} {template!r} does not contain {named}. {prompt_shape} "
+            f"The source rows are not visible at that point. Without every placeholder "
+            f"the identical question is asked for every pair, the extracted values are "
+            f"ignored, and the predicate keeps either all pairs or none. Do not restate "
+            f"the original condition in terms of the source rows. Rewrite "
+            f"{parameter_name} to reference {named} literally, for example: {example}"
+        )
+    try:
+        template.format(**{p: "" for p in placeholders})
+    except (KeyError, IndexError, ValueError) as error:
+        raise Mistake(
+            f"The {parameter_name} {template!r} is not a valid template: {error}. The "
+            f"only placeholders that may appear are "
+            f"{', '.join('{' + p + '}' for p in placeholders)}; any other curly brace "
+            f"must be doubled to be literal. For example: {example}"
+        ) from error
+
+
 class PhysicalOperatorInterface:
     def __init__(
         self,

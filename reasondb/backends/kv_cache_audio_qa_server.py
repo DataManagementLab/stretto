@@ -2,13 +2,18 @@ import argparse
 import json
 import asyncio
 import logging
+import time
 from tqdm import tqdm
 from flask import Flask, request
 from flask_restful import Resource, Api
-from typing import List
+from typing import List, Optional
 
-from reasondb.backends.kv_cache_base import KVCachingBackendBase
+from reasondb.backends.kv_cache_base import (
+    KVCachingBackendBase,
+    validate_kv_compression_ratios,
+)
 from reasondb.backends.audio_model import PORT_KV_AUDIO
+from reasondb.backends.inference_stats import build_inference_stats, gpu_snapshot
 import librosa
 import torch
 from kvpress import ExpectedAttentionPress, KeyRerotationPress
@@ -20,6 +25,20 @@ import contextlib
 from transformers import AutoProcessor
 
 from reasondb.memory_footprint.memory_report import compute_memory_footprints
+
+
+def _iter_cache_layers(cache):
+    """Yield (key_tensor, value_tensor) per layer for old and new DynamicCache."""
+    if hasattr(cache, "layers"):
+        # transformers 5.x
+        for layer in cache.layers:
+            yield layer.keys, layer.values
+    elif hasattr(cache, "_cache") and cache._cache and hasattr(cache._cache[0], "key_states"):
+        # transformers 4.50.3
+        for item in cache._cache:
+            yield item.key_states, item.value_states
+    else:
+        yield from zip(cache.__dict__["key_cache"], cache.__dict__["value_cache"])
 
 
 MODEL_NAME = "Qwen/Qwen2-Audio-7B-Instruct"
@@ -59,6 +78,36 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
         # Will be initialized in init()
         self.init()
 
+    def _validate_client_crs(
+        self,
+        effective_compression_ratio: float,
+        materialized_compression_ratio: float,
+        vanilla: bool,
+        keep_in_memory: bool = False,
+    ) -> None:
+        """The audio server has no relative-indices, vanilla or in-memory path, so the
+        only valid client configuration is materialized == effective, vanilla=False and
+        keep_in_memory=False."""
+        assert not vanilla, "vanilla mode is not supported by the audio server"
+        assert (
+            not keep_in_memory
+        ), "keep_in_memory is not supported by the audio server"
+        validate_kv_compression_ratios(
+            effective_compression_ratio,
+            materialized_compression_ratio,
+            vanilla,
+            keep_in_memory,
+        )
+        assert materialized_compression_ratio == effective_compression_ratio, (
+            "audio server does not support relative indices; materialized "
+            f"({materialized_compression_ratio}) must equal effective "
+            f"({effective_compression_ratio}) compression ratio"
+        )
+        assert effective_compression_ratio in self.compression_ratios, (
+            f"Compression ratio {effective_compression_ratio} not in supported ratios: "
+            f"{self.compression_ratios}"
+        )
+
     def compute_audio_qa_response(
         self,
         column_name: str,
@@ -67,10 +116,14 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
         compression_ratio: float,
         boolean_question: bool,
         cache_dir: str,
+        materialized_compression_ratio: float,
+        vanilla: bool,
+        keep_in_memory: bool = False,
     ):
-        assert (
-            compression_ratio in self.compression_ratios
-        ), f"Compression ratio {compression_ratio} not in supported ratios: {self.compression_ratios}"
+        self._validate_client_crs(
+            compression_ratio, materialized_compression_ratio, vanilla, keep_in_memory
+        )
+        _t0 = time.perf_counter()
         responses, log_odds = asyncio.run(
             self._run_kv_cache_multimodal(
                 column_name=column_name,
@@ -81,7 +134,54 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
                 cache_dir=cache_dir,
             )
         )
-        return {"answers": responses, "log_odds": log_odds}
+        return {
+            "answers": responses,
+            "log_odds": log_odds,
+            "stats": self._request_stats(
+                path="vanilla" if vanilla else "kv",
+                n_items=len(audio_paths),
+                elapsed_s=time.perf_counter() - _t0,
+                effective_compression_ratio=compression_ratio,
+                materialized_compression_ratio=materialized_compression_ratio,
+                vanilla=vanilla,
+            ),
+        }
+
+    def _request_stats(
+        self,
+        *,
+        path: str,
+        n_items: int,
+        elapsed_s: float,
+        effective_compression_ratio=None,
+        materialized_compression_ratio=None,
+        vanilla: bool = False,
+    ) -> dict:
+        """Request-level statistics attached to every response of this server.
+
+        This server carries no per-batch instrumentation, so it reports the cheap subset:
+        how long the request took, how many items it covered, the configured batch size,
+        and one GPU probe.
+        """
+        gpu, min_free = gpu_snapshot()
+        batch_size = self.compression_ratio_to_batch_size.get(
+            effective_compression_ratio
+        )
+        return build_inference_stats(
+            server="kv_audio_qa",
+            path=path,
+            model_name=self.model_name,
+            n_items=n_items,
+            batch_size=batch_size,
+            n_batches=(n_items + batch_size - 1) // batch_size if batch_size else None,
+            effective_compression_ratio=effective_compression_ratio,
+            materialized_compression_ratio=materialized_compression_ratio,
+            vanilla=vanilla,
+            server_elapsed_s=elapsed_s,
+            n_caches=n_items,
+            gpu=gpu,
+            min_free_gb=min_free,
+        )
 
     def hash_path(self, path: str) -> str:
         """Generate a sha256hash for a given path."""
@@ -95,14 +195,20 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
         audio_paths: List[str],
         cache_dir: str,
         compression_ratio: float,
+        materialized_compression_ratio: float,
+        vanilla: bool,
+        keep_in_memory: bool = False,
     ):
+        self._validate_client_crs(
+            compression_ratio, materialized_compression_ratio, vanilla, keep_in_memory
+        )
         assert self.pipe is not None, "Model pipeline is not initialized."
         assert self.pipe.tokenizer is not None, "Model tokenizer is not initialized."
         assert (
             compression_ratio in self.compression_ratios
         ), f"Compression ratio {compression_ratio} not in supported ratios: {self.compression_ratios}"
 
-        # Check if caches exist and generate if not (current method: checked one by one)
+        # Check if caches exist and generate them if not, one item at a time
         # Store mapping of row indices to cache files
         save_dir = f"{cache_dir}/comp{self.to_compression_tag(compression_ratio)}"
         os.makedirs(save_dir, exist_ok=True)
@@ -256,7 +362,7 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
         assert self.pipe is not None, "Model pipeline is not initialized."
         assert self.pipe.tokenizer is not None, "Model tokenizer is not initialized."
 
-        # Check if caches exist and generate if not (current method: checked one by one)
+        # Check if caches exist and generate them if not, one item at a time
         # Store mapping of row indices to cache files
         save_dir = f"{cache_dir}/comp{self.to_compression_tag(compression_ratio)}"
         os.makedirs(save_dir, exist_ok=True)
@@ -297,7 +403,6 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
             return []
 
         # Set up multimodal processing parameters
-        # context = "Answer the following question based on the audio with 'yes' or 'no'. Do not add any other comments."
         if boolean_question:
             context = "Answer the following question based on the audio with '1' or '0'. Do not add any other comments."
         else:
@@ -305,11 +410,13 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
         question = context + " " + question
         answer_prefix = "Answer: "
         batch_size = self.compression_ratio_to_batch_size[compression_ratio]
+        # layer_devices covers every parameter's device, mirroring the text/image servers:
+        # the estimator sizes against whichever GPU is tightest, not a single fixed device.
         batch_size = self._get_max_batch_size(
             column_name=column_name,
             batch_size=batch_size,
             compression_ratio=compression_ratio,
-            device_id=self.device_id,
+            layer_devices=list({p.device for p in self.pipe.model.parameters()}),
             file_paths=cache_files,
             cache_dir=cache_dir,
         )
@@ -342,7 +449,10 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
                     batch_audios[i], map_location=self.device, weights_only=False
                 )
                 caches.append(cache)
-                context_lengths.append(cache.get_seq_length())
+                if hasattr(cache, "_cache") and cache._cache:
+                    context_lengths.append(cache._cache[0].key_states.shape[2])
+                else:
+                    context_lengths.append(cache.__dict__["key_cache"][0].shape[2])
 
             if not caches:
                 continue
@@ -406,7 +516,7 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
 
             # Batch the caches
             batched_cache = []
-            for layers in zip(*caches):
+            for layers in zip(*[_iter_cache_layers(c) for c in caches]):
                 max_seq_len = max(k.shape[2] for k, _ in layers)
                 keys_padded = []
                 values_padded = []
@@ -440,10 +550,9 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
             # Move everything to device
             batched_inputs = batched_inputs.to(self.device)
             batched_attention_mask = batched_attention_mask.to(self.device)
-            padded_cache.key_cache = [k.to(self.device) for k in padded_cache.key_cache]
-            padded_cache.value_cache = [
-                v.to(self.device) for v in padded_cache.value_cache
-            ]
+            for item in padded_cache._cache:
+                item.key_states = item.key_states.to(self.device)
+                item.value_states = item.value_states.to(self.device)
 
             # Generate responses
             with torch.no_grad():
@@ -479,13 +588,6 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
             del caches, batched_inputs, batched_attention_mask, padded_cache
             torch.cuda.empty_cache()
 
-        # Process answers and create mask
-        # mask = []
-        # transformed_keep_answer = "1" if keep_answer == "yes" else "0"
-        # for data_id, answer in zip(data_ids, answers):
-        #     predicted_answer = transformed_keep_answer in answer.lower()
-        #     # logger.info(f"Row {data_id} answer: {answer} -> {predicted_answer}")
-        #     mask.append((data_id, predicted_answer))
 
         result_answers = {
             aud_path: "Not sure" for aud_path in audio_paths_without_caches
@@ -540,8 +642,9 @@ class KvAudioQaModelWrapper(KVCachingBackendBase):
                     )
 
             # Save cache to disk
-            cache.key_cache = [k.detach().cpu() for k in cache.key_cache]
-            cache.value_cache = [v.detach().cpu() for v in cache.value_cache]
+            for item in cache._cache:
+                item.key_states = item.key_states.detach().cpu()
+                item.value_states = item.value_states.detach().cpu()
 
             logger.info(f"Saving cache to: {cache_filename}")
 
@@ -588,17 +691,32 @@ class PrepareCaches(Resource):
         column_name = data["column_name"]
         aud_paths = data["audio_paths"]
         cache_dir = data["cache_dir"]
-        compression_ratio = data["compression_ratio"]
         assert model_wrapper is not None
+        _t0 = time.perf_counter()
         asyncio.run(
             model_wrapper.prepare_caches(
                 column_name=column_name,
                 audio_paths=aud_paths,
                 cache_dir=cache_dir,
-                compression_ratio=compression_ratio,
+                compression_ratio=data["effective_compression_ratio"],
+                materialized_compression_ratio=data["materialized_compression_ratio"],
+                vanilla=data["vanilla"],
+                keep_in_memory=data["keep_in_memory"],
             )
         )
-        return {"status": "cache_ready"}, 200
+        return {
+            "status": "cache_ready",
+            "stats": model_wrapper._request_stats(
+                path="prepare",
+                n_items=len(aud_paths),
+                elapsed_s=time.perf_counter() - _t0,
+                effective_compression_ratio=data["effective_compression_ratio"],
+                materialized_compression_ratio=data["materialized_compression_ratio"],
+                vanilla=data["vanilla"],
+                # No keep_in_memory here: _validate_client_crs has already rejected it,
+                # so this server's stats are always the disk-served ones.
+            ),
+        }, 200
 
 
 class AudioQA(Resource):
@@ -610,7 +728,9 @@ class AudioQA(Resource):
                 "/path/to/audio2.wav",
             ],
             "question": "Which animal is making the sound?",
-            "compression_ratio": 0.5,
+            "effective_compression_ratio": 0.5,
+            "materialized_compression_ratio": 0.5,
+            "vanilla": false,
             "boolean": true,
             "cache_dir": "/path/to/cache/dir",
 
@@ -620,7 +740,6 @@ class AudioQA(Resource):
         column_name = data["column_name"]
         aud_paths = data["audio_paths"]
         question = data["question"]
-        compression_ratio = data["compression_ratio"]
         boolean_question = data["boolean"]
         cache_dir = data["cache_dir"]
         assert model_wrapper is not None
@@ -628,9 +747,12 @@ class AudioQA(Resource):
             column_name=column_name,
             audio_paths=aud_paths,
             question=question,
-            compression_ratio=compression_ratio,
+            compression_ratio=data["effective_compression_ratio"],
             boolean_question=boolean_question,
             cache_dir=cache_dir,
+            materialized_compression_ratio=data["materialized_compression_ratio"],
+            vanilla=data["vanilla"],
+            keep_in_memory=data["keep_in_memory"],
         )
         return responses, 200
 

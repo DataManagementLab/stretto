@@ -249,7 +249,7 @@ class MultiModalPipeline(TuningPipeline):
 
 
 class AggregationSection(TuningPipeline):
-    """A plan section containing mulit-modal aggregation or a aggregation that depends on a multi-modal operator."""
+    """A plan section containing a multi-modal aggregation or an aggregation that depends on a multi-modal operator."""
 
     def __init__(
         self,

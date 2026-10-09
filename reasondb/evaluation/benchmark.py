@@ -3,7 +3,7 @@ import numpy as np
 import json
 import functools
 import random
-from typing import Dict, Literal, Optional, Sequence, Set, Tuple, Type, Union
+from typing import Any, Dict, Literal, Optional, Sequence, Set, Tuple, Type, Union
 import requests
 import logging
 import hashlib
@@ -13,18 +13,19 @@ import subprocess
 from pathlib import Path
 from tqdm import tqdm
 from dataclasses import dataclass
+from reasondb.backends.simulate_store import SimulateStore
 from reasondb.database.database import Database
 from reasondb.query_plan.logical_plan import LogicalFilter, LogicalPlanStep
 from reasondb.query_plan.query import (
     OperatorOption,
     Queries,
+    Query,
     QueryShape,
 )
 
 logger = logging.getLogger(__name__)
 
 
-# URL = namedtuple("URL", ["url", "hash", "path"])
 @dataclass
 class URL:
     url: str
@@ -48,6 +49,18 @@ class Benchmark(ABC):
     @abstractmethod
     def has_ground_truth(self) -> bool:
         pass
+
+    def query_count(self, debug_query: Optional[str] = None) -> int:
+        """How many queries a run over this benchmark will actually execute.
+
+        Mirrors the ``debug_query`` filter every collect_* entry point applies (see
+        ``evaluation.result_collection.collect_results_all_guarantees``): with one set,
+        a run executes only the matching query. Used by the coordinator's producers to
+        attach a query count to every enqueued job for progress reporting.
+        """
+        if debug_query is None:
+            return len(self.queries)
+        return sum(1 for q in self.queries if q.query == debug_query)
 
     @classmethod
     def dir(cls) -> Path:
@@ -88,9 +101,9 @@ class Benchmark(ABC):
     def download(split: Literal["train", "dev", "test"]) -> "Benchmark":
         pass
 
-    @staticmethod
+    @classmethod
     @abstractmethod
-    def load_from_disk(split: Literal["train", "dev", "test"]) -> "Benchmark":
+    def load_from_disk(cls, split: Literal["train", "dev", "test"]) -> "Benchmark":
         pass
 
     def __str__(self):
@@ -160,6 +173,92 @@ class Benchmark(ABC):
 
 
 class RandomBenchmark(Benchmark):
+    #: How many queries each shape is asked for.
+    num_queries_per_shape: int = 10
+
+    #: How many of those to *keep*, when a benchmark wants a smaller query set than it
+    #: draws. ``None`` keeps them all.
+    #:
+    #: Separate from ``num_queries_per_shape`` because ``generate_random_queries`` consumes
+    #: one seeded RNG stream shape by shape: lowering the draw count would change every
+    #: later shape's queries, whereas drawing all and keeping a prefix leaves the stream
+    #: (and hence any ``--precompute`` store recorded for it) valid.
+    queries_kept_per_shape: Optional[int] = None
+
+    @classmethod
+    @abstractmethod
+    def _load_database(cls, split: Literal["train", "dev", "test"]) -> Database:
+        """Just the data, without the query set, so callers that only need the tables
+        never trigger query generation as a side effect of loading."""
+
+    @classmethod
+    def load_from_disk(cls, split: Literal["train", "dev", "test"]) -> "Benchmark":
+        """Read the pinned query set if there is one; generate and pin it if not.
+
+        Pinning the set in ``queries.json`` guarantees that every later run (in particular
+        a ``--simulate`` replay, whose responses are recorded per expression) executes
+        exactly the queries of the recording ``--precompute`` run.
+        """
+        queries_dir = cls.benchmark_dir() / split
+        if (queries_dir / "queries.json").exists():
+            return cls(split, cls._load_database(split), Queries.load(queries_dir))
+        queries = cls.generate_random_queries(
+            split,
+            num_queries_per_shape=cls.num_queries_per_shape,
+            keep_per_shape=cls.queries_kept_per_shape,
+        )
+        queries.dump(queries_dir)
+        return cls(split, cls._load_database(split), queries)
+
+    @classmethod
+    def load_without_queries(cls, split: Literal["train", "dev", "test"]) -> "Benchmark":
+        """The database with an empty query set.
+
+        For callers that must not generate queries: the filter-stats pass (which is what
+        *produces* the stats generation needs), and the coordinator's enumeration (which
+        would otherwise dump a randomly-sampled set to ``queries.json`` and thereby make
+        it authoritative).
+        """
+        return cls(split, cls._load_database(split), Queries())
+
+    @classmethod
+    def count_queries(
+        cls, split: Literal["train", "dev", "test"], debug_query: Optional[str] = None
+    ) -> Optional[int]:
+        """How many queries a run would execute, or None if the set is not pinned yet.
+
+        Reads only ``queries.json`` - no database, no query generation - so the
+        coordinator can count queries cheaply while enumerating jobs.
+        """
+        queries_dir = cls.benchmark_dir() / split
+        if not (queries_dir / "queries.json").exists():
+            return None
+        queries = Queries.load(queries_dir)
+        if debug_query is None:
+            return len(queries)
+        return sum(1 for q in queries if q.query == debug_query)
+
+    @classmethod
+    def query_stats(
+        cls, split: Literal["train", "dev", "test"]
+    ) -> Dict[str, Dict[str, Any]]:
+        """``{query string: that query's shape statistics}``, from the pinned set.
+
+        The statistics (``num_semops``, ``num_sem_filter``, ...) are declared on each
+        ``QueryShape`` and copied onto the ``Query`` it instantiates. This reads them back
+        off ``queries.json`` alone - no database, no query generation - for use by
+        ``evaluate()`` in processes that never build the benchmark. Empty when the set is
+        not pinned yet or the shapes declare no ``additional_info``.
+        """
+        queries_dir = cls.benchmark_dir() / split
+        if not (queries_dir / "queries.json").exists():
+            return {}
+        return {
+            q.query: dict(q.additional_info)
+            for q in Queries.load(queries_dir)
+            if q.additional_info
+        }
+
     @classmethod
     def get_query_shapes(
         cls,
@@ -222,10 +321,13 @@ class RandomBenchmark(Benchmark):
                 return random.sample(options, count)
             else:
                 selected_options = filter_stats.sample_overlapping(
-                    options=options, num=count
+                    key=key, options=options, num=count
                 )
             if selected_options is None:
-                raise RuntimeError(f"Unable to sample {count} filters")
+                raise RuntimeError(
+                    f"no {count} filters of pool key {key!r} have a non-empty "
+                    "conjunction (every combination the stats know about is empty)"
+                )
             assert len(selected_options) == count
             return selected_options
 
@@ -234,12 +336,40 @@ class RandomBenchmark(Benchmark):
             return random.sample(options, count)
 
     @classmethod
-    def generate_random_queries(cls, split: str, num_queries_per_shape=10) -> Queries:
-        try:
-            filter_stats = cls.get_filter_stats(split)
-        except FileNotFoundError:
-            logger.warning("Filter stats not found, using empty stats")
-            filter_stats = None
+    def generate_random_queries(
+        cls,
+        split: str,
+        num_queries_per_shape=10,
+        filter_stats: Optional["FilterStats"] = None,
+        keep_per_shape: Optional[int] = None,
+    ) -> Queries:
+        """Draw the query set for *split*.
+
+        ``filter_stats`` is passed explicitly by the filter-stats pass, which has just
+        computed them; every other caller leaves it None and gets the lookup.
+
+        ``keep_per_shape`` truncates each shape's output *after* drawing it, leaving the
+        RNG stream untouched - see ``RandomBenchmark.queries_kept_per_shape`` for why
+        that is not the same as lowering ``num_queries_per_shape``. ``None`` keeps
+        everything drawn.
+        """
+        if filter_stats is None:
+            try:
+                filter_stats = cls.get_filter_stats(split)
+            except FileNotFoundError as e:
+                if os.environ.get("REASONDB_ALLOW_MISSING_FILTER_STATS") == "1":
+                    logger.warning(
+                        "Filter stats not found, sampling filters randomly "
+                        "(REASONDB_ALLOW_MISSING_FILTER_STATS=1)."
+                    )
+                    filter_stats = None
+                else:
+                    raise RuntimeError(
+                        f"Filter stats not found for {cls.name()}/{split}. They are "
+                        "computed by the coordinator's phase-0 filter-stats job (or by "
+                        "scripts/random_filter_stats.py for a one-off), which must run "
+                        "before any multi-operator query set exists."
+                    ) from e
         random.seed(42)
         already_used = set()
         queries = []
@@ -247,6 +377,7 @@ class RandomBenchmark(Benchmark):
         for key, query_shapes in cls.get_query_shapes().items():
             for shape_id in range(len(query_shapes)):
                 shape = query_shapes[shape_id]
+                emitted = 0
                 for _ in range(num_queries_per_shape):
                     try:
                         query = cls.instantiate_shape_randomly(
@@ -256,13 +387,19 @@ class RandomBenchmark(Benchmark):
                             filter_stats=filter_stats,
                             already_used=already_used,
                         )
-                    except RuntimeError:
+                    except RuntimeError as e:
                         logger.warning(
-                            f"Could not instantiate any more queries for shape {shape_id}"
+                            "Shape %s emitted %d of %d requested queries: %s",
+                            shape_id, emitted, num_queries_per_shape, e,
                         )
                         break
 
-                    queries.append(query)
+                    emitted += 1
+                    # Drawn either way - the draw is what advances the shared RNG, and
+                    # the next shape's queries depend on where it left off.
+                    caps = [c for c in (keep_per_shape, shape.queries_kept) if c]
+                    if not caps or emitted <= min(caps):
+                        queries.append(query)
         return Queries(*queries)
 
     @classmethod
@@ -273,8 +410,14 @@ class RandomBenchmark(Benchmark):
         shape: QueryShape,
         filter_stats: Optional["FilterStats"],
         already_used: Set[Tuple],
-        num_retries=10,
+        num_retries=50,
     ):
+        """Draw one query for *shape*, distinct from everything in ``already_used``.
+
+        Duplicates are retried rather than kept. ``num_retries`` has to exceed the pool's
+        crowding: e.g. movie's filter-filter shape draws 10 queries from C(10,2)=45
+        combinations, so finding the last unused one can take well over 10 tries.
+        """
         for _ in range(num_retries):
             required_operators = shape.get_required_operators_per_type()
             collected_options = {}
@@ -288,12 +431,14 @@ class RandomBenchmark(Benchmark):
 
             identifier = (shape_id, tuple(sorted(all_option_ids)))
             if identifier in already_used:
-                logger.debug("Duplicate query generated, retrying...")
+                continue
             already_used.add(identifier)
-            query = shape.instantiate(collected_options)
-            return query
+            return shape.instantiate(collected_options)
 
-        raise RuntimeError("Could not instantiate shape")
+        raise RuntimeError(
+            f"no combination unused by an earlier query in {num_retries} draws "
+            "(this shape's distinct combinations are exhausted)"
+        )
 
     @classmethod
     @abstractmethod
@@ -308,67 +453,133 @@ class RandomBenchmark(Benchmark):
         else:
             return {"": shapes}
 
+    @classmethod
+    def single_filter_plan(cls) -> Sequence[Tuple[str, OperatorOption, "Query"]]:
+        """``(pool key, option, query)`` for every filter in the pool, in query order.
+
+        The filter-stats pass needs the pairing, not just the queries, to know which pool
+        key and pool expression each row of the matrix belongs to.
+        """
+        random.seed(42)
+        plan = []
+        for key, shape in cls.single_filter_shape().items():
+            for option in cls.get_operator_options()[key][LogicalFilter]:
+                plan.append((key, option, shape.instantiate({LogicalFilter: [option]})))
+        return plan
+
     @property
     def single_filter_queries(self):
-        random.seed(42)
-        queries = []
-
-        shapes = self.single_filter_shape()
-        for key, shape in shapes.items():
-            options = self.get_operator_options()[key][LogicalFilter]
-            for option in options:
-                query = shape.instantiate({LogicalFilter: [option]})
-                queries.append(query)
-        return Queries(*queries)
+        return Queries(*[query for _key, _option, query in self.single_filter_plan()])
 
     @classmethod
-    def get_filter_stats(cls, split):
-        stats_file = Path(f"benchmark_results/filter_stats/{cls.name()}/{split}")
-        return FilterStats.load(stats_file)
+    def get_filter_stats(cls, split) -> "FilterStats":
+        """The installed store first, the on-disk copy second.
+
+        The store is guaranteed to agree with the pinned prompts it was computed under.
+        The ``benchmark_results/filter_stats`` copy is for inspection and for entry points
+        that install no store (demos, the single-operator studies).
+        """
+        store = SimulateStore.get_precompute() or SimulateStore.get_simulate()
+        if store is not None:
+            payload = store.get_filter_stats(cls.name(), split)
+            if payload is not None:
+                return FilterStats.from_payload(payload)
+        return FilterStats.load(cls.filter_stats_dir(split))
+
+    @classmethod
+    def filter_stats_dir(cls, split: str) -> Path:
+        return Path("benchmark_results") / "filter_stats" / cls.name() / str(split)
+
+
+class _PoolKeyStats:
+    """One pool key's predicate x tuple incidence matrix."""
+
+    def __init__(self, overlap_matrix, predicate_to_matrix_id, matrix_id_to_predicate,
+                 row_ids=None):
+        self.overlap_matrix = np.array(overlap_matrix, dtype=int)
+        self.predicate_to_matrix_id = dict(predicate_to_matrix_id)
+        self.matrix_id_to_predicate = {int(k): v for k, v in matrix_id_to_predicate.items()}
+        self.row_ids = list(row_ids or [])
+        assert len(self.predicate_to_matrix_id) == len(self.overlap_matrix), (
+            f"{len(self.predicate_to_matrix_id)} predicates but "
+            f"{len(self.overlap_matrix)} matrix rows - two pool options sharing an "
+            "expression would collapse into one row and silently mis-sample."
+        )
 
 
 class FilterStats:
-    def __init__(self, overlap_matrix, predicate_to_matrix_id, matrix_id_to_predicate):
-        self.overlap_matrix = np.array(
-            overlap_matrix, dtype=int
-        )  # Shape: num_pred x num_tuples
-        self.predicate_to_matrix_id = {
-            k.split(" -- ")[-1]: v for k, v in predicate_to_matrix_id.items()
-        }
-        self.matrix_id_to_predicate = {
-            int(k): v.split(" -- ")[-1] for k, v in matrix_id_to_predicate.items()
-        }
+    """Which tuples each filter predicate keeps, per pool key.
+
+    Cell ``(p, t)`` is 1 iff the gold model, asked predicate ``p`` about tuple ``t``,
+    kept it. :meth:`sample_overlapping` uses that to draw only filter combinations whose
+    conjunction covers at least one tuple, which is what keeps generated queries from
+    returning nothing.
+
+    The prediction holds because later queries ask the same gold model the same question
+    about the same row: the phrasing is pinned in the store this matrix ships in
+    (``_pin_operator_config`` keys on the expression canonicalized by alias *position*).
+
+    Limitations:
+
+    - **Only one pool key at a time.** Keys can sit over different base tables with
+      overlapping id spaces (rotowire's ``teams``/``players``), so their matrices must not
+      share a column space. ``sample_options`` never mixes keys.
+    - **Only filters.** Extracts are assumed not to drop rows; joins and limits are not
+      covered.
+    - **Only the gold run.** A compressed operator answers differently, so "non-empty
+      under gold" is not "non-empty at this sweep point".
+    - **Only for the data it was computed on.** Columns are base-table row ids, so the
+      payload records ``base_table_hashes`` to detect changed input CSVs.
+    """
+
+    def __init__(self, keys: Dict[str, _PoolKeyStats]):
+        self.keys = keys
         self.rng = np.random.default_rng(42)
 
     def sample_overlapping(
-        self, options: Sequence[OperatorOption], num: int, num_tries=200
+        self, key: str, options: Sequence[OperatorOption], num: int, num_tries=200
     ) -> Optional[Sequence[OperatorOption]]:
+        stats = self.keys.get(key)
+        assert stats is not None, (
+            f"no filter stats for pool key {key!r} (have: {sorted(self.keys)}); they were "
+            "computed for a different set of pool keys than this benchmark now declares."
+        )
         allowed_expressions = set(o.expression for o in options)
         allowed_map_mask = [
             i
-            for pred, i in self.predicate_to_matrix_id.items()
+            for pred, i in stats.predicate_to_matrix_id.items()
             if pred in allowed_expressions
         ]
+        if len(allowed_map_mask) < num:
+            return None
         for _ in range(num_tries):
             sample = self.rng.choice(
                 np.arange(len(allowed_map_mask)), size=num, replace=False
             )
             sample = [allowed_map_mask[i] for i in sample]
-            masks = self.overlap_matrix[sample]
+            masks = stats.overlap_matrix[sample]
             overlap = masks.all(0).any()
             if not overlap:
                 continue
-            result_predicates = set(self.matrix_id_to_predicate[s] for s in sample)
+            result_predicates = set(stats.matrix_id_to_predicate[s] for s in sample)
             result = [o for o in options if o.expression in result_predicates]
             assert len(result) == num
 
             return result
+        return None
 
     @classmethod
-    def load(cls, path: Path):
+    def from_payload(cls, payload: Dict) -> "FilterStats":
+        """Build from the shape recorded in the store (and mirrored to ``stats.json``)."""
+        return cls(
+            {key: _PoolKeyStats(**stats) for key, stats in payload["keys"].items()}
+        )
+
+    @classmethod
+    def load(cls, path: Path) -> "FilterStats":
         with (path / "stats.json").open("r") as f:
-            args = json.load(f)
-        return cls(**args)
+            payload = json.load(f)
+        return cls.from_payload(payload)
 
 
 @dataclass

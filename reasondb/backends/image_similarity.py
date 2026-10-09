@@ -1,6 +1,6 @@
 import requests
 import pandas as pd
-from typing import TYPE_CHECKING, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 from typing import Dict
 
 
@@ -27,6 +27,26 @@ class ImageSimilarityBackend(Backend):
     def __init__(self, model_name):
         self.check_model_name = model_name
         self.embed_cols: Dict[RealColumnIdentifier, HiddenColumnIdentifier] = {}
+        # Only known once `setup` has talked to the server.
+        self.embed_dim: Optional[int] = None
+
+    def assert_ready(self):
+        """Fail with an actionable message if `setup` never reached the server.
+
+        `ImageSimilarityFilter.setup` downgrades a failed setup to a warning, so a
+        missing server otherwise only surfaces much later as a missing `embed_dim`.
+        Note that `--simulate` does *not* cover the embedding backends: unlike the
+        KV text/vision backends, image embeddings are recomputed per run (the
+        database is reset per query), so this server is required either way.
+        """
+        if self.embed_dim is None:
+            raise RuntimeError(
+                f"Image similarity backend {self.check_model_name} is not set up: "
+                f"no server answered on http://localhost:{PORT_IMAGE_SIM}. Start it "
+                f"with `python reasondb/backends/image_similarity_server.py` (see "
+                f"scripts/start_servers_images.sh); it is also needed under "
+                f"--simulate, which only replays text-QA and vision responses."
+            )
 
     def setup(
         self,
@@ -38,7 +58,7 @@ class ImageSimilarityBackend(Backend):
         assert json_response["status"] == "alive"
         assert json_response["model_name"] == self.check_model_name
         logger.info(
-            "__name__", f"Image similarity model {self.check_model_name} is ready"
+            __name__, f"Image similarity model {self.check_model_name} is ready"
         )
         self.embed_dim = json_response["embed_dim"]
 
@@ -51,6 +71,7 @@ class ImageSimilarityBackend(Backend):
         embed_cols: Dict["RealColumnIdentifier", "HiddenColumnIdentifier"],
         logger: FileLogger,
     ):
+        self.assert_ready()
         collect_images = []
         num_images = 0
         self.embed_cols = embed_cols
@@ -132,6 +153,7 @@ class ImageSimilarityBackend(Backend):
         concrete_image_column: "ConcreteColumn",
         description: str,
     ) -> Tuple["HiddenColumnIdentifier", np.ndarray]:
+        self.assert_ready()
         assert isinstance(concrete_image_column, RealColumnIdentifier)
         embed_col = self.embed_cols[concrete_image_column]
         result = requests.post(

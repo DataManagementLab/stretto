@@ -75,7 +75,7 @@ class Plan(ABC):
         return result
 
     def validate(self, database: "Database"):
-        """Validates the plan by checking if the referenced root tables exist and if the input of one step is the either e root table or the output of a previous step."""
+        """Validates the plan by checking if the referenced root tables exist and if the input of one step is either a root table or the output of a previous step."""
         working_tables: Dict[VirtualTableIdentifier, Set[VirtualColumnIdentifier]] = {
             table.identifier: set(table.columns) for table in database.root_tables
         }
@@ -174,14 +174,13 @@ class PlanStep(ABC):
         result = []
         for input_table_identifier in self.inputs:
             input_table = database_state.get_virtual_table(input_table_identifier)
-            data_iterator = input_table.get_data(
+            data_iterator = await input_table.get_data(
                 limit=limit,
                 offset=0,
                 logger=logger,
                 for_prompt=True,
             )
-            data_sample = [x async for _, _, x, _ in data_iterator]
-            df = pd.DataFrame(data_sample)
+            df = pd.DataFrame(data_iterator.to_df())
             result.append(df)
         return result
 

@@ -82,6 +82,31 @@ class Observation(ABC):
     def get_virtual_sql(self, input_sql_queries: List[SqlQuery]) -> SqlQuery:
         return self.get_sql(input_sql_queries)
 
+    @staticmethod
+    def projection_with(
+        project_columns: Sequence[ConcreteColumn], new_column: ConcreteColumn
+    ) -> List[ConcreteColumn]:
+        """``project_columns`` with ``new_column`` under its alias.
+
+        An observation that adds a column must *replace* any column already projected
+        under that alias, not append a second one: `SqlQuery` rejects a projection with
+        two columns sharing an output name, and both `ExtractObservation.transform_input`
+        and `UDFObservation.transform_input` overwrite the value in place
+        (``data[name] = ...``). Shared by both observation types, e.g. for a
+        `PythonCodegenExtract` of ``[gender]`` over a table that already has ``gender``.
+        """
+        result: List[ConcreteColumn] = []
+        replaced = False
+        for column in project_columns:
+            if column.alias == new_column.alias:
+                result.append(new_column)
+                replaced = True
+            else:
+                result.append(column)
+        if not replaced:
+            result.append(new_column)
+        return result
+
     @abstractmethod
     def get_concrete_output_column(self, column_name: str) -> ConcreteColumn:
         pass
@@ -260,11 +285,15 @@ class ThresholdFilterOnComputedDataObservation(Observation):
         hidden_columns: HiddenColumns,
         logical_plan_step: "LogicalPlanStep",
         quality: float,
+        upper_threshold_name="logodds_threshold_upper",
+        lower_threshold_name="logodds_threshold_lower",
     ):
         self.hidden_columns = hidden_columns
         self.hidden_column = hidden_columns.hidden_column
         self.logical_plan_step = logical_plan_step
         self.quality = quality
+        self.upper_threshold_name = upper_threshold_name
+        self.lower_threshold_name = lower_threshold_name
         super().__init__()
         assert logical_plan_step.validated
 
@@ -272,8 +301,8 @@ class ThresholdFilterOnComputedDataObservation(Observation):
         raise RuntimeError("FilterObservation does not have output column")
 
     def configure(self, tuning_parameters: Dict[str, Any]):
-        self.threshold_upper = tuning_parameters["logodds_threshold_upper"]
-        self.threshold_lower = tuning_parameters["logodds_threshold_lower"]
+        self.threshold_upper = tuning_parameters[self.upper_threshold_name]
+        self.threshold_lower = tuning_parameters[self.lower_threshold_name]
         if self.threshold_lower >= self.threshold_upper:
             middle = (self.threshold_lower + self.threshold_upper) / 2
             self.threshold_lower = middle
@@ -427,10 +456,37 @@ class ThresholdObservation(Observation):
         random_ids: Optional[Sequence[pd.Series]],
         database_state: "IntermediateState",
     ) -> Tuple[pd.DataFrame, pd.Series]:
-        # if len(input_data[0]) == 0:
-        #     return input_data[0], pd.Series(index=input_data[0].index)
+        if self.threshold_upper is None or self.threshold_lower is None:
+            raise RuntimeError("ThresholdObservation not configured yet!")
+        assert len(input_data) == 1
+        assert random_ids is None or len(random_ids) == 1
 
-        raise NotImplementedError
+        data = input_data[0]
+        transform_indices, values = zip(*transform_data)
+        transform_index = pd.MultiIndex.from_tuples(transform_indices)
+        values = pd.Series(values, index=transform_index)
+
+        # Every comparison below is False on a null, so a row whose score is missing
+        # would be discarded exactly like a row scored below the threshold. The two
+        # mean opposite things: one is a decision, the other is the absence of one.
+        n_missing = int(values.isna().sum())
+        if n_missing:
+            raise RuntimeError(
+                f"ThresholdObservation got no value for {n_missing} of {len(values)} "
+                "rows. A missing value is not a value below the threshold."
+            )
+
+        mask_df = values > self.threshold_lower
+        sure_df = values > self.threshold_upper
+        if random_ids is not None:
+            allow_accept_df = random_ids[0] >= self.not_allow_accept_fraction
+            do_not_allow_discard_df = random_ids[0] < self.not_allow_discard_fraction
+            mask_df = mask_df | do_not_allow_discard_df
+            sure_df = sure_df & allow_accept_df
+
+        filtered_data = data.loc[mask_df.astype(bool)]
+        sure_mask = sure_df.loc[mask_df.astype(bool)]
+        return filtered_data, sure_mask
 
 
 class ExtractObservation(Observation):
@@ -465,7 +521,7 @@ class ExtractObservation(Observation):
         table = database_state.get_virtual_table(output_table_identifier)
         data = [
             row
-            async for _, _, row, _ in table.get_data(
+            for _, _, row, _ in await table.get_data(
                 columns=[self.new_column],
                 limit=10,
                 logger=logger,
@@ -482,21 +538,10 @@ class ExtractObservation(Observation):
         self,
         input_sql_queries: List[SqlQuery],
     ) -> SqlQuery:
-        old_project_columns = list(input_sql_queries[0].get_project_columns())
-        new_project_columns = []
-        added_column = False
-        for col in old_project_columns:
-            if col.alias == self.new_column.column_name:
-                new_project_columns.append(
-                    self.get_concrete_output_column(self.new_column.column_name)
-                )
-                added_column = True
-            else:
-                new_project_columns.append(col)
-        if not added_column:
-            new_project_columns.append(
-                self.get_concrete_output_column(self.new_column.column_name)
-            )
+        new_project_columns = self.projection_with(
+            input_sql_queries[0].get_project_columns(),
+            self.get_concrete_output_column(self.new_column.column_name),
+        )
 
         sql = (
             input_sql_queries[0]
@@ -579,7 +624,7 @@ class UDFObservation(Observation):
         table = database_state.get_virtual_table(output_table_identifier)
         data = [
             row
-            async for _, _, row, _ in table.get_data(
+            for _, _, row, _ in await table.get_data(
                 columns=[self.new_column],
                 limit=10,
                 logger=logger,
@@ -601,7 +646,9 @@ class UDFObservation(Observation):
         )
         self.udf_column.set_logical_plan_step(self.logical_plan_step)
         sql = input_sql_queries[0].project(
-            list(input_sql_queries[0].get_project_columns()) + [self.udf_column]
+            self.projection_with(
+                input_sql_queries[0].get_project_columns(), self.udf_column
+            )
         )
         return sql
 

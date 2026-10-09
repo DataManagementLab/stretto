@@ -1,13 +1,11 @@
 from abc import ABC, abstractmethod
+import numpy as np
 from functools import partial
 import asyncio
 from collections.abc import Sequence
 from typing import (
-    AsyncGenerator,
-    Dict,
     List,
     Optional,
-    Tuple,
     Container,
 )
 import pandas as pd
@@ -40,6 +38,190 @@ class PROMPT_FORMAT:
     MARKDOWN = "markdown"
     CSV = "csv"
     SAMPLE_LIST = "sample_list"
+
+
+def _as_inferred_dtype(array):
+    """Widen a ``fetchnumpy`` column to the dtype row-wise inference would have produced.
+
+    ``pd.DataFrame(cursor.fetchall())`` infers from Python scalars, so every integer
+    becomes ``int64``, every float ``float64``, every timestamp ``datetime64[ns]``, and a
+    nullable numeric column collapses to ``float64`` with ``NaN``. ``fetchnumpy`` reports
+    DuckDB's own widths instead (``int32`` for INTEGER, ``float32`` for FLOAT,
+    ``datetime64[us]`` for TIMESTAMP) and returns a masked array where the column is
+    nullable. Only those two families differ; strings stay ``object`` and nullable
+    booleans stay ``object`` under both paths.
+    """
+    if isinstance(array, np.ma.MaskedArray):
+        if np.ma.getmaskarray(array).all():
+            # An all-NULL column is a column of ``None`` row-wise, and pandas infers
+            # ``object`` from that -- it only promotes to ``float64`` once there is a
+            # number to promote against.
+            return np.array([None] * len(array), dtype=object)
+        if array.dtype.kind in "iuf":
+            return array.astype(np.float64).filled(np.nan)
+    dtype = getattr(array, "dtype", None)
+    if dtype is None:
+        return array
+    if dtype.kind in "iu" and dtype.itemsize < 8:
+        return array.astype(np.int64)
+    if dtype.kind == "f" and dtype.itemsize < 8:
+        return array.astype(np.float64)
+    if dtype.kind == "M" and dtype != np.dtype("datetime64[ns]"):
+        return array.astype("datetime64[ns]")
+    return array
+
+
+class DataIterator:
+    def __init__(self, database: "Database", sql_str: str, limit: Optional[int] = None):
+        self.database = database
+        self.sql_str = sql_str
+        self.limit = limit
+        self.column_names = None
+
+    def set_column_names(self, column_names):
+        self.column_names = column_names
+
+    def get_no_return_random_value(self):
+        return DataIteratorNoRandom(self)
+
+    def __iter__(self):
+        assert self.column_names is not None
+        for row in self.data_iter():
+            index_cols = [col for col in row.index if col.startswith("_index_")]
+            index_vals = tuple(row[col] for col in index_cols)
+            flag_cols = [col for col in row.index if col.startswith("_flag_")]
+            flag_dict = {col[len("_flag_") :]: row[col] for col in flag_cols}
+
+            random_value = row["__random__"] if "__random__" in row.index else 0.0
+            yield index_vals, flag_dict, row[self.column_names], random_value
+
+    def data_iter(self):
+        cursor = self.database.sql(self.sql_str)
+        assert cursor.description is not None
+        column_names = [col[0] for col in cursor.description]
+        i = 0
+        while (self.limit is None or i < self.limit) and (row := cursor.fetchone()):
+            yield pd.Series(row, index=column_names)
+            i += 1
+
+    def get_full_data(self):
+        cursor = self.database.sql(self.sql_str)
+        assert cursor.description is not None
+        column_names = [col[0] for col in cursor.description]
+        if len(set(column_names)) == len(column_names):
+            # `fetchnumpy()` returns one array per column instead of one Python tuple per
+            # row (as `fetchall()` does), which matters for large results such as joins.
+            # Unlike `.df()` or Arrow, it yields dtypes `DataType.from_pandas` accepts.
+            # See `tests/test_data_iterator_fetch_parity.py`.
+            columns = cursor.fetchnumpy()
+            n_rows = len(columns[column_names[0]]) if column_names else 0
+            if n_rows == 0:
+                # With no rows there is nothing to infer from, and the row-wise path
+                # yields all-``object`` columns rather than DuckDB's declared types.
+                result = pd.DataFrame([], columns=pd.Index(column_names))
+            else:
+                result = pd.DataFrame(
+                    {name: _as_inferred_dtype(columns[name]) for name in column_names}
+                )
+        else:
+            # Duplicate output names collapse in the dict `fetchnumpy` returns, so keep
+            # the row-wise path for them. `SqlQuery` rejects duplicate aliases, so this
+            # is a guard rather than a live case.
+            result = pd.DataFrame(cursor.fetchall(), columns=pd.Index(column_names))
+        if self.limit is not None:
+            return result.iloc[: self.limit]
+        return result
+
+    def get_full(self):
+        assert self.column_names is not None
+        df = self.get_full_data()
+        index_cols = [col for col in df.columns if col.startswith("_index_")]
+        index_df = df[index_cols]
+        flag_cols = [col for col in df.columns if col.startswith("_flag_")]
+        flag_df = df[flag_cols]
+        flag_df.columns = [c[len("_flag_") :] for c in flag_df.columns]
+        data_df = df[self.column_names]
+        random_value = (
+            df["__random__"]
+            if "__random__" in df.columns
+            else pd.Series([0.0] * len(df))
+        )
+        return (index_df, flag_df, data_df, random_value)
+
+    def to_df(self):
+        _, _, data_df, _ = self.get_full()
+        return data_df
+
+    def to_df_with_index(self, index_columns):
+        index_df, _, data_df, _ = self.get_full()
+        index_df = index_df[index_columns]
+        index = pd.MultiIndex.from_frame(index_df)
+        data_df.index = index
+        return data_df
+
+    def to_df_with_flags(
+        self,
+        index_columns: Sequence[IndexColumn],
+    ):
+        """Converts a data iterator to a pandas DataFrame."""
+        index_df, flags_df, data_df, random_values = self.get_full()
+        flags_df["_random_id"] = random_values
+        index_df = index_df[[c.col_name for c in index_columns]]
+        index = pd.MultiIndex.from_frame(index_df)
+        data_df.index = index
+        flags_df.index = index
+        return data_df, flags_df
+
+    def to_df_with_skip_flags(
+        self,
+        index_columns: Sequence[IndexColumn],
+        skip_flag: Optional[str],
+        logger: FileLogger,
+    ):
+        """Converts a data iterator to a pandas DataFrame."""
+        index_df, flags_df, data_df, _ = self.get_full()
+        mask = np.ones(len(index_df), dtype=bool)
+        if skip_flag in flags_df.columns:
+            mask = ~flags_df[skip_flag]
+
+        index_df = index_df[mask]
+        index_df = index_df[[c.col_name for c in index_columns]]
+        data_df = data_df[mask]
+
+        index = pd.MultiIndex.from_frame(index_df)
+        data_df.index = index
+        return data_df
+
+
+class DataIteratorNoRandom:
+    def __init__(self, data_iterator):
+        self.data_iterator = data_iterator
+
+    def __iter__(self):
+        for x in self.data_iterator:
+            return x[:3]
+
+    def get_full_data(self):
+        return self.data_iterator.get_full_data()
+
+    def to_df(self):
+        return self.data_iterator.to_df()
+
+    def to_df_with_index(self, index_names):
+        return self.data_iterator.to_df_with_index(index_names)
+
+    def to_df_with_flags(self, index_columns):
+        return self.data_iterator.to_df_with_flags(index_columns)
+
+    def to_df_with_skip_flags(
+        self,
+        index_columns: Sequence[IndexColumn],
+        skip_flag: Optional[str],
+        logger: FileLogger,
+    ):
+        return self.data_iterator.to_df_with_skip_flags(
+            index_columns=index_columns, skip_flag=skip_flag, logger=logger
+        )
 
 
 class BaseTable(ABC):
@@ -86,7 +268,7 @@ class BaseTable(ABC):
         finalized: bool = False,
         gold_mixing: bool = False,
         logger: FileLogger,
-    ) -> AsyncGenerator[Tuple[Tuple, Dict, pd.Series, float], None]:
+    ) -> DataIterator:
         """Get the data from the table as an iterator of tuples.
         :param limit: The maximum number of rows to return.
         :param offset: The number of rows to skip before returning data.
@@ -97,7 +279,7 @@ class BaseTable(ABC):
         :return: An iterator of tuples, where each tuple contains the index values and the row data.
         """
         column_names = [col.alias for col in (columns or self.columns)]
-        async for row in self._iter_data(
+        data_iterator = await self._iter_data(
             limit=limit,
             offset=offset,
             for_prompt=for_prompt,
@@ -105,13 +287,9 @@ class BaseTable(ABC):
             finalized=finalized,
             gold_mixing=gold_mixing,
             logger=logger,
-        ):
-            index_cols = [col for col in row.index if col.startswith("_index_")]
-            index_vals = tuple(row[col] for col in index_cols)
-            flag_cols = [col for col in row.index if col.startswith("_flag_")]
-            flag_dict = {col[len("_flag_") :]: row[col] for col in flag_cols}
-            random_value = row["__random__"] if "__random__" in row.index else 0.0
-            yield index_vals, flag_dict, row[column_names], random_value
+        )
+        data_iterator.set_column_names(column_names)
+        return data_iterator
 
     @abstractmethod
     def estimated_len(self) -> int:
@@ -120,9 +298,7 @@ class BaseTable(ABC):
 
     async def _for_prompt(
         self,
-        query: Optional[
-            "Query"
-        ],  
+        query: Optional["Query"],
         logger: FileLogger,
         max_num_rows=10,
         max_value_length=100,
@@ -178,10 +354,7 @@ class BaseTable(ABC):
             max_num_rows=max_num_rows,
             filter_columns=filter_columns,
         )
-        relevant_samples = {}  
-        # relevant_samples = await self._pick_relevant_samples(
-        #     data.columns.tolist(), query, len(data)
-        # )
+        relevant_samples = {}
         data = data.map(
             lambda x: str(x)[:max_value_length] + "..."
             if len(str(x)) > max_value_length
@@ -266,21 +439,17 @@ class BaseTable(ABC):
         :param filter_columns: The columns to filter.
         :return: A DataFrame with the sample values and a dictionary of data types.
         """
-        data = [
-            row
-            async for _, _, row, _ in self._get_data(
-                limit=max_num_rows,
-                for_prompt=True,
-                logger=logger,
-            )
-        ]
+        data_iterator = await self._get_data(
+            limit=max_num_rows,
+            for_prompt=True,
+            logger=logger,
+        )
+        data_iterator.set_column_names([col.alias for col in self.columns])
+        dtype_map = {col.alias: col.data_type for col in self.columns}
+        data = data_iterator.to_df()
         if len(data) == 0:
-            data = pd.DataFrame(columns=[col.alias for col in self.columns])
-            dtype_map = {col.alias: col.data_type for col in self.columns}
             return data, dtype_map
 
-        data = pd.concat([d.to_frame().T for d in data]).reset_index(drop=True)
-        dtype_map = {col.alias: col.data_type for col in self.columns}
         if filter_columns is not None:
             data = data[
                 [
@@ -304,19 +473,9 @@ class BaseTable(ABC):
     async def _to_df(self):
         """Get the data from the table as a DataFrame."""
         logger = NoLogger()
-        data = [
-            row
-            async for _, _, row, _ in self._get_data(
-                limit=None,
-                for_prompt=True,
-                logger=logger,
-            )
-        ]
-        if len(data) == 0:
-            data = pd.DataFrame(columns=[col.alias for col in self.columns])
-            return data
-
-        data = pd.concat([d.to_frame().T for d in data]).reset_index(drop=True)
+        data_iterator = await self._get_data(limit=None, for_prompt=True, logger=logger)
+        data_iterator.set_column_names([col.alias for col in self.columns])
+        data = data_iterator.to_df()
         return data
 
     def to_df(self):
@@ -364,7 +523,7 @@ class BaseTable(ABC):
         finalized: bool = False,
         gold_mixing: bool = False,
         logger: FileLogger,
-    ) -> AsyncGenerator[pd.Series, None]:
+    ) -> DataIterator:
         """Iterate over the data in the table.
         :param limit: The maximum number of rows to return.
         :param offset: The number of rows to skip before returning data.
@@ -437,7 +596,7 @@ class ConcreteTable(BaseTable):
         columns: Optional[Sequence[ConcreteColumn]] = None,
         finalized: bool = False,
         logger: FileLogger,
-    ) -> AsyncGenerator[Tuple[Tuple, Dict, pd.Series], None]:
+    ) -> DataIteratorNoRandom:
         """Get the data from the table as an iterator of tuples.
         :param limit: The maximum number of rows to return.
         :param offset: The number of rows to skip before returning data.
@@ -446,21 +605,19 @@ class ConcreteTable(BaseTable):
         :param logger: The logger to use.
         :return: An iterator of tuples, where each tuple contains the index values and the row data.
         """
-        async for x in super()._get_data(
+        iterator = await super()._get_data(
             limit=limit,
             offset=offset,
             for_prompt=for_prompt,
             columns=columns,
             finalized=finalized,
             logger=logger,
-        ):
-            yield x[:3]
+        )
+        return iterator.get_no_return_random_value()
 
     async def for_prompt(
         self,
-        query: Optional[
-            "Query"
-        ],  
+        query: Optional["Query"],
         logger: FileLogger,
         max_num_rows=10,
         max_value_length=100,
@@ -529,7 +686,7 @@ class ConcreteTable(BaseTable):
         finalized: bool = False,
         gold_mixing: bool = False,
         logger: FileLogger,
-    ) -> AsyncGenerator[pd.Series, None]:
+    ) -> DataIterator:
         """Iterate over the data in the table.
         :param limit: The maximum number of rows to return.
         :param offset: The number of rows to skip before returning data.
@@ -541,31 +698,33 @@ class ConcreteTable(BaseTable):
 
         project = ", ".join([str(c) for c in self.columns])
         if gold_mixing:
-            random_col = (f" , (hash("
+            random_col = (
+                f" , (hash("
                 f"{', '.join(c.col_name for c in self.index_columns)}"
-                f", 42) & 4294967295 )::DOUBLE / 4294967296.0 AS __random__")
+                f", 42) & 4294967295 )::DOUBLE / 4294967296.0 AS __random__"
+            )
             project += random_col
         limit_suffix = f"LIMIT {limit}" if limit is not None else ""
         offset_suffix = f"OFFSET {offset}" if offset is not None else ""
         cond_list = []
-        if fix_samples is not None:  
-            for i, sample_index in enumerate(fix_samples.index_columns):
-                if sample_index.table_identifier != self.identifier:
-                    continue
-                cond_list.append(
-                    f"{sample_index.project_no_alias} IN ({', '.join(map(str, fix_samples.index_column_values[str(i)].tolist()))})"
-                )
+        if fix_samples is not None:
+            row_conds = []
+            for _, values in fix_samples.index_column_values.iterrows():
+                idx_col_conds = []
+                for sample_index, v in zip(fix_samples.index_columns, values):
+                    if sample_index.table_identifier == self.identifier:
+                        idx_col_conds.append(f"{sample_index.project_no_alias} == {v}")
+                row_cond = "(" + " AND ".join(idx_col_conds) + ")"
+                row_conds.append(row_cond)
+            fix_sample_cond = "(" + " OR ".join(row_conds) + ")"
+            cond_list.append(fix_sample_cond)
 
         where_suffix = ""
         if len(cond_list) > 0:
             where_suffix = "WHERE (" + ") AND (".join(cond_list) + ")"
 
         sql_str = f"SELECT {project} FROM {self.identifier} {where_suffix} {limit_suffix} {offset_suffix}".strip()
-        cursor = self._database.sql(sql_str)
-        assert cursor.description is not None
-        column_names = [col[0] for col in cursor.description]
-        while row := cursor.fetchone():
-            yield pd.Series(row, index=column_names)
+        return DataIterator(self._database, sql_str)
 
     def __len__(self):
         """Get the number of rows in the table."""

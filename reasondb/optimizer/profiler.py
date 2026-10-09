@@ -1,8 +1,9 @@
 from collections import defaultdict
+import math
 import pandas as pd
 import torch
 from torch import Tensor
-from typing import TYPE_CHECKING, Dict, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Sequence, Tuple, Set
 from reasondb.optimizer.decision import Decision
 
 from torch.nn import Sigmoid, Softmax
@@ -14,6 +15,7 @@ from reasondb.database.intermediate_state import (
     IntermediateState,
 )
 from reasondb.optimizer.sampler import ProfilingSampleSpecification
+from reasondb.utils.answer_normalization import postprocess_dataframe
 from reasondb.query_plan.physical_operator import PhysicalOperator, ProfilingCost
 from reasondb.query_plan.tuning_workflow import (
     TuningPipeline,
@@ -25,6 +27,7 @@ from reasondb.query_plan.unoptimized_physical_plan import (
 from reasondb.reasoning.exceptions import Mistake
 from reasondb.reasoning.observation import Observation
 from reasondb.utils.logging import FileLogger
+from reasondb.utils.timing import measure
 
 if TYPE_CHECKING:
     from reasondb.optimizer.gd_optimizer import DifferentiableConfig
@@ -40,8 +43,34 @@ class ProfilingOutput:
         self.observations: Dict[Tuple[int, int, int], Observation] = {}
         self.per_operator_cost: Dict[Tuple[int, int, int], ProfilingCost] = {}
         self.num_input_tuples: Dict[Tuple[int, int], int] = {}
+        #: Tuples each *operator* was actually run on, which differs from
+        #: ``num_input_tuples`` when profiling happens over several rounds: an operator
+        #: that failed or was pruned contributes cost only for the rounds it ran, so its
+        #: per-tuple cost must be computed over those rounds' tuples only.
+        self.num_input_tuples_per_operator: Dict[Tuple[int, int, int], int] = {}
+        #: ``(cascade_id, level, operator_id)`` of every operator here that supplies
+        #: labels rather than being an executable candidate. Their profiling cost is
+        #: annotation effort, not query cost -- see ``total_cost``.
+        self.label_only_keys: Set[Tuple[int, int, int]] = set()
         self._index_values_to_numeric: Dict[Tuple[int, ...], int] = {}
         self._numeric_indexes: Dict[Tuple[int, int], Tensor] = {}
+
+    @property
+    def device(self) -> Optional[torch.device]:
+        """Where this output's tensors currently live, or None if it holds none.
+
+        Every tensor here moves together (see :meth:`to`), so the first one answers
+        for all of them.
+        """
+        for store in (
+            self.labels,
+            self.profiler_outputs,
+            self.output_masks,
+            self._numeric_indexes,
+        ):
+            for tensor in store.values():
+                return tensor.device
+        return None
 
     def to(self, device: torch.device) -> "ProfilingOutput":
         for key in self.labels:
@@ -56,10 +85,31 @@ class ProfilingOutput:
 
     @property
     def total_cost(self) -> ProfilingCost:
+        """What profiling this plan cost the *system*.
+
+        Excludes label operators: annotation effort is not query cost, and this value
+        is both the reported tuning cost and an input to the "sample more?" decision in
+        ``post_optimization_check``. The annotation burden is reported separately as
+        :attr:`n_labels_requested`.
+        """
         total = ProfilingCost(0.0, 0.0, 0.0)
-        for cost in self.per_operator_cost.values():
+        for key, cost in self.per_operator_cost.items():
+            if key in self.label_only_keys:
+                continue
             total += cost
         return total
+
+    @property
+    def n_labels_requested(self) -> int:
+        """How many tuples a human had to label to tune this plan.
+
+        The annotation burden, measured rather than priced: one label per profiled tuple
+        per label-supplying step. Zero unless a label operator was attached.
+        """
+        return sum(
+            self.num_input_tuples.get((cascade_id, level), 0)
+            for cascade_id, level, _ in self.label_only_keys
+        )
 
     def get_numeric_index(
         self,
@@ -71,19 +121,36 @@ class ProfilingOutput:
     @property
     def total_cost_per_sample(self) -> ProfilingCost:
         total = ProfilingCost(0.0, 0.0, 0.0)
-        for (cascade_id, level, _), cost in self.per_operator_cost.items():
-            num_samples = self.num_input_tuples[(cascade_id, level)]
-            total += cost / num_samples
+        for key, cost in self.per_operator_cost.items():
+            if key in self.label_only_keys:
+                # See `total_cost`: annotation effort is not query cost.
+                continue
+            total += cost / self._operator_input_tuples(key)
         return total
+
+    def _operator_input_tuples(self, key: Tuple[int, int, int]) -> int:
+        """Tuples to divide an operator's accumulated cost by.
+
+        The per-operator count when there is one, the level-wide count otherwise (in a
+        single-round run the two are equal by construction).
+        """
+        cascade_id, level, _ = key
+        return self.num_input_tuples_per_operator.get(
+            key, self.num_input_tuples[(cascade_id, level)]
+        )
 
     def per_operator_and_sample_cost(
         self, cascade_id: int, level: int, operator_id: int
     ) -> ProfilingCost:
-        cost = self.per_operator_cost.get(
-            (cascade_id, level, operator_id), ProfilingCost(0.0, 0.0, 0.0)
-        )
-        num_samples = self.num_input_tuples[(cascade_id, level)]
-        return cost / num_samples
+        if (cascade_id, level, operator_id) in self.label_only_keys:
+            # This feeds the differentiable cost model's `cost_vector`, whose sum is the
+            # denominator every job's cost is scaled by. A large entry there makes every
+            # plan's scaled cost ~0 and the optimizer cost-blind -- and the operator is
+            # never executed, so it costs the plan nothing.
+            return ProfilingCost(0.0, 0.0, 0.0)
+        key = (cascade_id, level, operator_id)
+        cost = self.per_operator_cost.get(key, ProfilingCost(0.0, 0.0, 0.0))
+        return cost / self._operator_input_tuples(key)
 
     def add(self, cascade_output: "ProfileLevelOutput"):
         cascade_id = cascade_output.cascade_id
@@ -103,16 +170,33 @@ class ProfilingOutput:
             )
 
         self.labels[(cascade_id, level)] = cascade_output.labels
+        self.label_only_keys.update(
+            (cascade_id, level, operator_id)
+            for operator_id in cascade_output.label_only_operator_ids
+        )
         for operator_id, observation in cascade_output.observations.items():
             self.observations[(cascade_id, level, operator_id)] = observation
             self.per_operator_cost[(cascade_id, level, operator_id)] = (
                 cascade_output.per_operator_costs[operator_id]
+            )
+            self.num_input_tuples_per_operator[(cascade_id, level, operator_id)] = (
+                cascade_output.num_input_tuples
             )
 
     def prepend(self, other: Optional["ProfilingOutput"], logger: FileLogger):
         if other is None:
             self.compute_numeric_indexes()
             return
+        # `other` is the previous sampling round's output, which the optimizer moved
+        # onto its own device; this round's has just been profiled and is on the CPU.
+        # Every merge below is a `torch.cat` of one against the other, so align them
+        # first -- onto ours, since what follows is CPU-side bookkeeping (pandas
+        # indices, `.numpy()` in the baselines).
+        if self.device is not None and other.device != self.device:
+            other.to(self.device)
+        # Union rather than assume they match: an operator that failed to profile in one
+        # round is absent from that round's output.
+        self.label_only_keys |= other.label_only_keys
         all_merged_sorted_indices = {}
         for cascade_id, level in other.merged_output_tuples.keys():
             self.merged_output_tuples[(cascade_id, level)] = pd.concat(
@@ -157,7 +241,20 @@ class ProfilingOutput:
                 + self.num_input_tuples[(cascade_id, level)]
             )
 
-        for cascade_id, level, operator_id in other.profiler_outputs.keys():
+        for cascade_id, level, operator_id in list(other.profiler_outputs.keys()):
+            if (cascade_id, level, operator_id) not in self.profiler_outputs:
+                # This round did not profile that operator: it was pruned (no feasible
+                # restart picked it) or it failed. Drop the previous round's half rather
+                # than carrying it: a half-accumulated operator has rows for some of the
+                # sample and not the rest.
+                #
+                # Everything downstream treats a missing operator as one that failed to
+                # profile (`get_transition_probabilities` skips it,
+                # `simulate_pipeline_pass` calls `add_failed_operator`, and
+                # `get_tuned_pipeline_from_config` will not plan it). Pruning is thus a
+                # commitment: the operator does not come back.
+                self._forget_operator((cascade_id, level, operator_id))
+                continue
             # merge first
             self.profiler_outputs[(cascade_id, level, operator_id)] = torch.cat(
                 [
@@ -221,8 +318,26 @@ class ProfilingOutput:
                 other.per_operator_cost[(cascade_id, level, operator_id)]
                 + self.per_operator_cost[(cascade_id, level, operator_id)]
             )
+            # ...and the tuples that cost was incurred over, which is what makes the
+            # sum divisible back into a per-tuple price. Summed in lockstep with the
+            # cost, so the two can never describe different sets of rounds.
+            self.num_input_tuples_per_operator[(cascade_id, level, operator_id)] = other.num_input_tuples_per_operator.get(
+                (cascade_id, level, operator_id), 0
+            ) + self.num_input_tuples_per_operator.get(
+                (cascade_id, level, operator_id), 0
+            )
 
         self.compute_numeric_indexes()
+
+    def _forget_operator(self, key: Tuple[int, int, int]) -> None:
+        """Remove every trace of one operator from this accumulated output."""
+        self.profiler_outputs.pop(key, None)
+        self.output_masks.pop(key, None)
+        self.per_operator_output_tuples.pop(key, None)
+        self.observations.pop(key, None)
+        self.per_operator_cost.pop(key, None)
+        self.num_input_tuples_per_operator.pop(key, None)
+        self.label_only_keys.discard(key)
 
     def compute_numeric_indexes(self):
         self._index_values_to_numeric = {}
@@ -238,8 +353,11 @@ class ProfilingOutput:
             numeric_indexes = index_tuples.map(
                 lambda idx: self._index_values_to_numeric[idx]
             )
+            # On this output's own device, not the default one: these index tensors
+            # feed `scatter_reduce` against the optimizer's device tensors in
+            # `compute_merged_scores`, and all tensors here move together.
             self._numeric_indexes[(cascade_id, level)] = torch.tensor(
-                numeric_indexes, dtype=torch.long
+                numeric_indexes, dtype=torch.long, device=self.device or "cpu"
             )
 
     def get(self, cascade_id: int, level: int, operator_id: int):
@@ -269,6 +387,7 @@ class ProfileLevelOutput:
         observations: Dict[int, Observation],
         per_operator_costs: Dict[int, ProfilingCost],
         num_input_tuples: int,
+        label_only_operator_ids: Optional[Set[int]] = None,
     ):
         self.cascade_id = cascade_id
         self.level = level
@@ -280,6 +399,10 @@ class ProfileLevelOutput:
         self.observations = observations
         self.per_operator_costs = per_operator_costs
         self.num_input_tuples = num_input_tuples
+        #: Operators here that supply labels rather than being executable candidates.
+        #: Their profiling cost is annotation effort, not query cost, and their extracted
+        #: values are the reference every other candidate is compared against.
+        self.label_only_operator_ids = set(label_only_operator_ids or ())
 
     @property
     def merged_output_tuples(self) -> pd.DataFrame:
@@ -297,6 +420,11 @@ class ProfileLevelOutput:
     def consoldidate(self):
         for ot in self._output_tuples.values():
             assert (ot.index == ot.sort_index().index).all()
+
+        self._output_tuples = {
+            op_id: postprocess_dataframe(df)
+            for op_id, df in self._output_tuples.items()
+        }
 
         concatenated = pd.concat(self._output_tuples)
         index_names = list(concatenated.index.names)
@@ -336,26 +464,29 @@ class Profiler:
         previous_observations: Optional[Dict[Tuple[int, int, int], Observation]],
         sample: "ProfilingSampleSpecification",
         logger: FileLogger,
+        operator_filter: Optional[Dict[Tuple[int, int], Set[int]]] = None,
     ) -> ProfilingOutput:
-        input_data = await self.get_inputs_for_profiling(
-            pipeline=pipeline,
-            intermediate_state=intermediate_state,
-            sample=sample,
-            logger=logger,
-        )
-        profiling_output = ProfilingOutput()
-        for cascade_id, cascade in enumerate(pipeline.steps_in_parallel):
-            await self.profile_cascade(
-                cascade_id=cascade_id,
-                cascade=cascade,
-                input_data=input_data,
+        with measure("profiling"):
+            input_data = await self.get_inputs_for_profiling(
+                pipeline=pipeline,
                 intermediate_state=intermediate_state,
                 sample=sample,
-                profiling_output=profiling_output,
-                previous_observations=previous_observations,
                 logger=logger,
             )
-        return profiling_output
+            profiling_output = ProfilingOutput()
+            for cascade_id, cascade in enumerate(pipeline.steps_in_parallel):
+                await self.profile_cascade(
+                    cascade_id=cascade_id,
+                    cascade=cascade,
+                    input_data=input_data,
+                    intermediate_state=intermediate_state,
+                    sample=sample,
+                    profiling_output=profiling_output,
+                    previous_observations=previous_observations,
+                    logger=logger,
+                    operator_filter=operator_filter,
+                )
+            return profiling_output
 
     async def profile_cascade(
         self,
@@ -367,6 +498,7 @@ class Profiler:
         profiling_output: ProfilingOutput,
         previous_observations: Optional[Dict[Tuple[int, int, int], Observation]],
         logger: FileLogger,
+        operator_filter: Optional[Dict[Tuple[int, int], Set[int]]] = None,
     ):
         profile_level_outputs = {}
         profiling_pipeline = UnoptimizedPhysicalPlan()
@@ -379,6 +511,11 @@ class Profiler:
                     profile_level_outputs=profile_level_outputs,
                     logger=logger,
                 )
+            allowed_operator_ids = (
+                None
+                if operator_filter is None
+                else operator_filter.get((cascade_id, level))
+            )
             profile_level_output = await self.profile_level(
                 input_data=level_input_data,
                 cascade_id=cascade_id,
@@ -388,12 +525,19 @@ class Profiler:
                 previous_observations=previous_observations,
                 level=level,
                 logger=logger,
+                allowed_operator_ids=allowed_operator_ids,
             )
             profile_level_outputs[step.output] = profile_level_output
 
+            # The label source's observation advances the profiling state to the next
+            # cascade level. That stays right when the source is a human: an
+            # observation describes the step's *schema* -- which hidden column holds the
+            # verdict, which column an extract adds -- not its verdicts, and every
+            # candidate for a step produces the same one.
+            gold_operator_id = len(step.operators) - 1
             intermediate_state = profiling_pipeline.append(
                 step=step,
-                observation=profile_level_output.observations[step.chosen_operator_idx],
+                observation=profile_level_output.observations[gold_operator_id],
                 database=intermediate_state,
             )
             profiling_output.add(profile_level_output)
@@ -422,6 +566,7 @@ class Profiler:
         previous_observations: Optional[Dict[Tuple[int, int, int], Observation]],
         level: int,
         logger: FileLogger,
+        allowed_operator_ids: Optional[Set[int]] = None,
     ) -> ProfileLevelOutput:
         step = cascade[level]
         keep_labels = None
@@ -430,10 +575,27 @@ class Profiler:
         all_observations = {}
         per_operator_costs = defaultdict(lambda: ProfilingCost(0.0, 0.0, 0.0))
         data_sample = [input_data[tbl] for tbl in step.inputs]
+        sample_size = math.prod([len(d) for d in data_sample])
+        dataset_size = int(sample_size / sample.sample_fraction)
 
+        allowed_operator_id_set = (
+            None if allowed_operator_ids is None else set(allowed_operator_ids)
+        )
         for operator_id, operator in enumerate(step.operators):
             llm_parameters = step.llm_configurations[operator.get_llm_parameters().name]
+            # The last candidate is where this step's labels come from -- either the
+            # highest-quality model, or a human label source when one is attached. Either
+            # way it must be profiled, because every other candidate is scored against
+            # it. Whether it may also be *executed* is a separate question, answered by
+            # `is_label_only` in the optimizer.
             is_gold = operator_id == len(step.operators) - 1
+
+            if (
+                allowed_operator_id_set is not None
+                and operator_id not in allowed_operator_id_set
+                and not is_gold  # gold operator is always needed to derive labels
+            ):
+                continue
 
             if previous_observations is not None:
                 try:
@@ -497,6 +659,14 @@ class Profiler:
                 )
                 if not is_gold:
                     continue
+                # `fallback_gold_profile` fabricates an all-KEEP matrix, i.e. it declares
+                # every tuple a positive label. That is a last resort for a model that
+                # failed, but never acceptable for a human label source (which raises
+                # `MissingLabelsError`, not `Mistake`, so this is not expected to trigger).
+                assert not getattr(operator, "is_label_only", False), (
+                    f"Label operator {operator} failed to profile; refusing to fabricate "
+                    f"all-KEEP labels for it. Original error: {m}"
+                )
                 output_tuples, profile_output, profile_cost = (
                     self.fallback_gold_profile(
                         operator=operator,
@@ -507,7 +677,6 @@ class Profiler:
             argsorted = output_tuples.index.argsort()
             output_tuples = output_tuples.iloc[argsorted]
             profile_output = profile_output[torch.from_numpy(argsorted)]
-            # duplicated = output_tuples.duplicated()
             duplicated = output_tuples.assign(  # need to also take index into account when deciding duplicates
                 **{
                     name: output_tuples.index.get_level_values(i)
@@ -529,8 +698,16 @@ class Profiler:
             all_output_tuples[operator_id] = output_tuples
             all_observations[operator_id] = observation
 
-            per_operator_costs[operator_id] = profile_cost
-            per_sample_cost = profile_cost / len(data_sample[0])
+            scaled_profile_cost = operator.scale_cost(
+                cost=profile_cost, sample_size=sample_size, dataset_size=dataset_size
+            )
+            if scaled_profile_cost != profile_cost:
+                logger.info(
+                    __name__,
+                    f"Scaled cost from {profile_cost} to {scaled_profile_cost}",
+                )
+            per_operator_costs[operator_id] = scaled_profile_cost
+            per_sample_cost = scaled_profile_cost / len(data_sample[0])
 
             logger.info(
                 __name__,
@@ -547,6 +724,11 @@ class Profiler:
             observations=all_observations,
             per_operator_costs=per_operator_costs,
             num_input_tuples=len(data_sample[0]),
+            label_only_operator_ids={
+                op_id
+                for op_id in all_output_tuples
+                if getattr(step.operators[op_id], "is_label_only", False)
+            },
         )
         result.consoldidate()
         return result
@@ -595,9 +777,7 @@ class Profiler:
             padded_soft_decisions = torch.zeros(
                 mask.shape[0], soft_decisions.shape[1], 3, device=soft_decisions.device
             )
-            padded_soft_decisions[:, :, Decision.DISCARD] = (
-                1.0  
-            )
+            padded_soft_decisions[:, :, Decision.DISCARD] = 1.0
             padded_soft_decisions[mask, :, :] = soft_decisions
 
             operator_pick_score = config.get_operator_pick_score(

@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, List, Optional, Sequence, Union, Callable
+from typing import TYPE_CHECKING, List, Optional, Sequence, Union
 import pandas as pd
-import math
 import numpy as np
 from reasondb.database.indentifier import (
     ConcreteColumn,
@@ -21,11 +20,7 @@ if TYPE_CHECKING:
 SEED = 42
 
 
-def DEFAULT_SAMPLE_BUDGET(num_rows: int) -> int:
-    # return min(
-    #     num_rows // 2, max(25, int(25 * math.log2(num_rows + 1) - 115))
-    # )  # results in 25 for 50 rows and 130 for 1000 rows and 217 for 10k rows
-    return int(0.15 * num_rows)  # 15% sample
+DEFAULT_SAMPLE_SIZE = 100
 
 
 class Sampler(ABC):
@@ -36,6 +31,8 @@ class Sampler(ABC):
         input_columns: Sequence["VirtualColumnIdentifier"],
         previous_sample: Optional["ProfilingSampleSpecification"],
         database: "Database",
+        sample_size: Optional[int] = None,
+        round_index: int = 0,
     ) -> "ProfilingSampleSpecification":
         pass
 
@@ -46,17 +43,64 @@ class Sampler(ABC):
 
 
 class UniformSampler(Sampler):
+    """Draws `sample_size` rows in total, optionally `batch_size` of them at a time.
+
+    Both are plain counts. The table's size is read only to report what *fraction* of
+    it was sampled (`sample_fraction`, which the optimizer extrapolates execution cost
+    from) -- never to decide how many rows to draw.
+    """
+
     def __init__(
         self,
-        sample_budget: Callable[[int], int] = DEFAULT_SAMPLE_BUDGET,
-        sample_size: Optional[int] = None,
+        sample_size: int = DEFAULT_SAMPLE_SIZE,
+        batch_size: Optional[int] = None,
     ):
         self.sample_size = sample_size
-        self.sample_budget = sample_budget
+        #: Rows per round, or None to draw the whole `sample_size` at once.
+        self._batch_size = batch_size
 
     @property
     def batch_size(self) -> Optional[int]:
-        return self.sample_size
+        return self._batch_size
+
+    @staticmethod
+    def _draw(
+        database: "Database",
+        table_name: str,
+        col_str: str,
+        index_columns: Sequence[IndexColumn],
+        previous_sample: Optional["ProfilingSampleSpecification"],
+        sample_size: int,
+        seed: int,
+    ):
+        """Reservoir-sample `sample_size` rows, minus everything already drawn.
+
+        The exclusion is an anti-join against a registered view rather than one
+        ``(c0 = v0 AND c1 = v1)`` OR-term per already-drawn row, so the SQL text does
+        not grow with the number of rows drawn.
+        """
+        if previous_sample is None or len(previous_sample.index_column_values) == 0:
+            return database.sql(
+                f"SELECT {col_str} FROM {table_name} "
+                f"USING SAMPLE reservoir({sample_size} ROWS) REPEATABLE ({seed})"
+            ).fetchall()
+
+        drawn = previous_sample.index_column_values
+        view = f"_already_sampled_{abs(hash(table_name)) % (10**8)}"
+        # The frame's columns are positional ("0", "1", ...); name them after the index
+        # columns they correspond to so the join predicate can be written by name.
+        renamed = drawn.rename(
+            columns={str(i): c.col_name for i, c in enumerate(index_columns)}
+        )
+        predicate = " AND ".join(
+            f"t.{c.col_name} = p.{c.col_name}" for c in index_columns
+        )
+        with database.temporary_view(view, renamed):
+            return database.sql(
+                f"SELECT {col_str} FROM {table_name} t "
+                f"WHERE NOT EXISTS (SELECT 1 FROM {view} p WHERE {predicate}) "
+                f"USING SAMPLE reservoir({sample_size} ROWS) REPEATABLE ({seed})"
+            ).fetchall()
 
     def sample(
         self,
@@ -64,14 +108,29 @@ class UniformSampler(Sampler):
         input_columns: Sequence[VirtualColumnIdentifier],
         previous_sample: Optional["ProfilingSampleSpecification"],
         database: "Database",
+        sample_size: Optional[int] = None,
+        round_index: int = 0,
     ) -> "ProfilingSampleSpecification":
+        """Draw rows to profile on, excluding anything an earlier round already drew.
+
+        ``sample_size`` is this round's batch, which the adaptive loop grows between
+        rounds; ``None`` draws the whole budget at once. ``round_index`` varies the
+        seeds: reservoir sampling with a fixed
+        ``REPEATABLE`` over a table that differs only by the exclusion set returns
+        strongly correlated draws round to round, which is the opposite of what a second
+        round is for. Varying it by round keeps runs reproducible while making the
+        rounds independent.
+        """
+        # Rows to draw: this round's batch if the caller named one, else the standing
+        # per-round batch, else the whole budget in one go. No table size involved.
+        rows_this_round = (
+            sample_size
+            if sample_size is not None
+            else (self._batch_size if self._batch_size is not None else self.sample_size)
+        )
         result = []
         for mat_point in intermediate_state.materialization_points:
-            num_rows = mat_point.estimated_len()
-            sample_budget = self.sample_budget(num_rows)
-            sample_size = (
-                sample_budget if self.sample_size is None else self.sample_size
-            )
+            sample_size = rows_this_round
 
             virtual_input_columns_this_mat_point = [
                 c for c in input_columns if c in mat_point.virtual_columns
@@ -88,28 +147,17 @@ class UniformSampler(Sampler):
             index_columns = mat_point.index_columns
             col_str = ", ".join([c.col_name for c in index_columns])
 
-            cond_str = ""
-            db_sample_size = sample_size
-            if previous_sample is not None:
-                db_sample_size = len(previous_sample.index_column_values) + sample_size
-                db_sample_size = min(sample_budget, db_sample_size)
-                cond_str = ") OR (".join(
-                    [
-                        " AND ".join(
-                            [
-                                f"{c.col_name} == {previous_values[str(i)]}"
-                                for i, c in enumerate(index_columns)
-                            ]
-                        )
-                        for _, previous_values in previous_sample.index_column_values.iterrows()
-                    ]
-                )
-                cond_str = f"WHERE NOT (({cond_str}))"
-
-            sample = database.sql(
-                f"SELECT {col_str} FROM {mat_point.tmp_table_name} {cond_str} USING SAMPLE reservoir({db_sample_size} ROWS) REPEATABLE ({SEED})"
-            ).fetchall()
-            rng = np.random.default_rng(SEED)
+            seed = SEED + round_index
+            sample = self._draw(
+                database=database,
+                table_name=mat_point.tmp_table_name,
+                col_str=col_str,
+                index_columns=index_columns,
+                previous_sample=previous_sample,
+                sample_size=sample_size,
+                seed=seed,
+            )
+            rng = np.random.default_rng(seed)
             sample = rng.choice(
                 sample,
                 replace=False,
@@ -122,8 +170,13 @@ class UniformSampler(Sampler):
                 df = pd.DataFrame(sample, columns=column_names).sort_values(
                     column_names
                 )
-            sample_fraction = sample_size / mat_point.estimated_len()
-            sample_fraction = min(sample_fraction, 1.0)
+            # Rows actually returned, not rows requested. An exhausted table (or a
+            # round capped by the total budget) hands back fewer than asked for, and
+            # overstating the fraction here understates `dataset_size = sample_size /
+            # sample_frac` downstream -- which is the row count the optimizer weighs
+            # execution cost against.
+            rows_drawn = len(df)
+            sample_fraction = min(rows_drawn / mat_point.estimated_len(), 1.0)
 
             result.append(
                 ProfilingSampleSpecification(
@@ -133,6 +186,8 @@ class UniformSampler(Sampler):
                     materialization_point=mat_point,
                     index_columns=index_columns,
                     sample_fraction=sample_fraction,
+                    rows_per_materialization_point=[rows_drawn],
+                    materialization_point_sizes=[mat_point.estimated_len()],
                 )
             )
         merged_result = ProfilingSampleSpecification.merge(result)
@@ -150,12 +205,29 @@ class ProfilingSampleSpecification:
         ],
         index_columns: Sequence[IndexColumn],
         sample_fraction: float,
+        rows_per_materialization_point: Optional[Sequence[int]] = None,
+        materialization_point_sizes: Optional[Sequence[int]] = None,
     ):
         from reasondb.query_plan.tuning_workflow import (
             TuningMaterializationPoint,
         )
 
         self.sample_fraction = sample_fraction
+        #: Rows drawn from each materialization point, and how many rows each holds.
+        #: Kept alongside the fraction because the fraction alone cannot be accumulated
+        #: correctly: `merge` multiplies across mat points, so adding fractions across
+        #: rounds computes `sum_k prod_m (s_k / N_m)` where the right answer is
+        #: `prod_m (sum_k s_k / N_m)`. The same for one mat point, wrong for two.
+        self.rows_per_materialization_point: List[int] = list(
+            rows_per_materialization_point
+            if rows_per_materialization_point is not None
+            else [len(index_column_values)]
+        )
+        self.materialization_point_sizes: List[int] = list(
+            materialization_point_sizes
+            if materialization_point_sizes is not None
+            else []
+        )
         self.index_column_values = index_column_values
         self.virtual_input_columns = virtual_input_columns
         self.original_concrete_input_columns = original_concrete_input_columns
@@ -216,13 +288,44 @@ class ProfilingSampleSpecification:
             .sort_values(by=list(self.index_column_values.columns))
             .reset_index(drop=True)
         )
-        self.sample_fraction += other.sample_fraction
-        self.sample_fraction = min(self.sample_fraction, 1.0)
+        # Accumulate rows per materialization point and recompute the fraction from
+        # them, rather than adding two fractions that are each already a product across
+        # mat points (see the note on `rows_per_materialization_point`).
+        if len(self.rows_per_materialization_point) == len(
+            other.rows_per_materialization_point
+        ):
+            self.rows_per_materialization_point = [
+                mine + theirs
+                for mine, theirs in zip(
+                    self.rows_per_materialization_point,
+                    other.rows_per_materialization_point,
+                )
+            ]
+        if not self.materialization_point_sizes:
+            self.materialization_point_sizes = list(other.materialization_point_sizes)
+        self.sample_fraction = self._fraction_from_rows(
+            fallback=min(self.sample_fraction + other.sample_fraction, 1.0)
+        )
         assert set(self.virtual_input_columns) == set(other.virtual_input_columns)
         assert set(self.original_concrete_input_columns) == set(
             other.original_concrete_input_columns
         )
         assert set(self.index_columns) == set(other.index_columns)
+
+    def _fraction_from_rows(self, fallback: float) -> float:
+        """The sampled fraction, recomputed from accumulated per-mat-point row counts.
+
+        Falls back to ``fallback`` when the sizes were not recorded (e.g. a
+        specification built by hand).
+        """
+        sizes = self.materialization_point_sizes
+        rows = self.rows_per_materialization_point
+        if not sizes or len(sizes) != len(rows) or any(n <= 0 for n in sizes):
+            return fallback
+        fraction = 1.0
+        for drawn, total in zip(rows, sizes):
+            fraction *= min(drawn / total, 1.0)
+        return min(fraction, 1.0)
 
     @staticmethod
     def merge(
@@ -245,6 +348,12 @@ class ProfilingSampleSpecification:
                 m for s in samples for m in s.materialization_points
             ],
             sample_fraction=np.prod([s.sample_fraction for s in samples]).item(),
+            rows_per_materialization_point=[
+                n for s in samples for n in s.rows_per_materialization_point
+            ],
+            materialization_point_sizes=[
+                n for s in samples for n in s.materialization_point_sizes
+            ],
         )
 
     def get_condition(self):

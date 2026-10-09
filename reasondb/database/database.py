@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from reasondb.database.external_table import ExternalTable
 from reasondb.database.indentifier import (
+    ConcreteColumn,
     ConcreteColumnIdentifier,
     ConcreteTableIdentifier,
     DataType,
@@ -36,7 +37,7 @@ from reasondb.database.indentifier import (
 )
 from reasondb.database.metadata import DatabaseMetadata
 from reasondb.database.sql import SqlQuery
-from reasondb.database.table import ConcreteTable
+from reasondb.database.table import ConcreteTable, DataIterator
 from reasondb.database.virtual_table import RootTable
 from reasondb.reasoning.embeddings import TextEmbedding3Small
 from reasondb.reasoning.llm import GPT4oMini
@@ -119,6 +120,19 @@ class Database:
     async def wind_down(self):
         await self._metadata.wind_down()
 
+    def snapshot_external_tables(self):
+        """Snapshot each external table's cache file once it holds the generic,
+        query-independent prepared state (e.g. computed embeddings), so later
+        `reset()` calls can restore it instead of recomputing that state.
+        """
+        for table in self.external_tables:
+            table.snapshot()
+
+    def cleanup_backups(self):
+        """Delete the per-run backup snapshots taken by `snapshot_external_tables`."""
+        for table in self.external_tables:
+            table.delete_backup()
+
     @property
     def root_tables(self):
         """The tables that are actually stored in the database."""
@@ -181,15 +195,29 @@ class Database:
         :param materialized_table_name: The name of the materialized table.
         :return: The SQL query to materialize the table.
         """
+        suffix = 0
         project_columns = list(sql.get_project_columns())
         for column in sql.get_project_columns():
-            if column in self._coupled_columns:
-                operator, coupled_column_identifier = self._coupled_columns[column]
+            if column.table_identifier is None or not isinstance(
+                column, RealColumnIdentifier
+            ):
+                continue
+            renamed_column = ConcreteColumnIdentifier(
+                sql._table_renamings.get(
+                    column.table_identifier, column.table_identifier
+                ).table_name
+                + "."
+                + column.column_name
+            )
+            if renamed_column in self._coupled_columns:
+                operator, coupled_column_identifier = self._coupled_columns[
+                    renamed_column
+                ]
                 materialized_orig_column = RealColumnIdentifier(
-                    f"{materialized_table_name}.{column.column_name}"
+                    f"{materialized_table_name}.{column.alias}"
                 )
                 materialized_hidden_column = HiddenColumnIdentifier(
-                    f"{materialized_table_name}.{coupled_column_identifier.column_name}"
+                    f"{materialized_table_name}.{coupled_column_identifier.column_name}_{suffix}"
                 )
                 operator.notify_materialization(
                     column=materialized_orig_column,
@@ -202,7 +230,13 @@ class Database:
                 )
                 if coupled_column_identifier not in project_columns:
                     coupled_column = self.get_concrete_column(coupled_column_identifier)
-                    project_columns.append(coupled_column)
+                    renamed_coupled_column = ConcreteColumn(
+                        f"{column.table_name}.{coupled_column_identifier.column_name}",
+                        data_type=coupled_column.data_type,
+                        alias=f"{coupled_column_identifier.column_name}_{suffix}",
+                    )
+                    project_columns.append(renamed_coupled_column)
+                suffix += 1
         sql = sql.project(project_columns)
         return sql
 
@@ -274,48 +308,19 @@ class Database:
         """
         return self._connection.execute(sql_string, args)
 
-    @staticmethod
-    async def data_iterator_to_dataframe(
-        data_iterator: AsyncGenerator[Tuple[Tuple, Dict, pd.Series], None],
-        index_columns: Sequence[IndexColumn],
-        skip_flag: Optional[str],
-        logger: FileLogger,
-    ):
-        """Converts a data iterator to a pandas DataFrame."""
-        collected_index = []
-        collected_data = []
-        async for row_ids, flags, data in data_iterator:
-            if flags.get(skip_flag, False):
-                logger.info(__name__, f"Skipping row due to skip flag {skip_flag}.")
-                continue
-            collected_index.append(row_ids)
-            collected_data.append(data)
-        index = pd.MultiIndex.from_frame(
-            pd.DataFrame(collected_index, columns=[c.col_name for c in index_columns])
-        )
-        df = pd.DataFrame(collected_data, index=index)
-        return df
+    @contextmanager
+    def temporary_view(self, name: str, frame: "pd.DataFrame"):
+        """Expose a DataFrame as a view for the duration of the block.
 
-    @staticmethod
-    async def data_iterator_to_dataframe_with_flags(
-        data_iterator: AsyncGenerator[Tuple[Tuple, Dict, pd.Series, float], None],
-        index_columns: Sequence[IndexColumn],
-        logger: FileLogger,
-    ):
-        """Converts a data iterator to a pandas DataFrame."""
-        collected_index = []
-        collected_data = []
-        collected_flags = []
-        async for row_ids, flags, data, random_id in data_iterator:
-            collected_index.append(row_ids)
-            collected_data.append(data)
-            collected_flags.append(flags | {"_random_id": random_id})
-        index = pd.MultiIndex.from_frame(
-            pd.DataFrame(collected_index, columns=[c.col_name for c in index_columns])
-        )
-        data_df = pd.DataFrame(collected_data, index=index)
-        flags_df = pd.DataFrame(collected_flags, index=index)
-        return data_df, flags_df
+        For predicates that would otherwise have to be inlined into the SQL text one
+        row at a time. Registered rather than materialized, and unregistered on the way
+        out, so nothing survives into the schema or into `concrete_tables`.
+        """
+        self._connection.register(name, frame)
+        try:
+            yield name
+        finally:
+            self._connection.unregister(name)
 
     def drop_table(self, table_name: str):
         """Drop a table from the database.

@@ -56,30 +56,36 @@ class EcommerceLarge(Benchmark):
     def get_csv():
         orig_csv = (
             Path(__file__).parent / "files" / "ecommerce_products_large.csv"
-        )  # update
+        )
         return orig_csv
+
+    @staticmethod
+    def get_queries() -> Queries:
+        return ECOMMERCE_QUERIES
 
     @staticmethod
     def urls():
         return {}
 
-    @staticmethod
-    def download(split: Literal["train", "dev", "test"]) -> Benchmark:
+    @classmethod
+    def download(cls, split: Literal["train", "dev", "test"]) -> Benchmark:
         assert split == "dev"
-        os.makedirs(EcommerceLarge.dir(), exist_ok=True)
-        return EcommerceLarge.load_from_disk(split)
+        os.makedirs(cls.dir(), exist_ok=True)
+        return cls.load_from_disk(split)
 
-    @staticmethod
-    def load_from_disk(split: Literal["train", "dev", "test"]) -> "Benchmark":
+    @classmethod
+    def load_from_disk(cls, split: Literal["train", "dev", "test"]) -> "Benchmark":
+        # Via `cls` throughout so a subclass overriding only `name()`/`get_queries()`
+        # inherits this wiring -- see reasondb/evaluation/benchmarks/curated.py.
         assert split == "dev"
-        os.makedirs(EcommerceLarge.dir(), exist_ok=True)
-        benchmark = EcommerceLarge(
+        os.makedirs(cls.dir(), exist_ok=True)
+        benchmark = cls(
             split,
             ExperimentalDatabase.load_from_files(
-                db_name=EcommerceLarge.name(),
+                db_name=cls.name(),
                 split=split,
                 table_names=["products"],
-                paths=[EcommerceLarge.get_csv()],
+                paths=[cls.get_csv()],
                 text_columns=[
                     InPlaceColumn("products.description"),
                 ],
@@ -90,7 +96,7 @@ class EcommerceLarge(Benchmark):
                     )
                 ],
             ),
-            ECOMMERCE_QUERIES,
+            cls.get_queries(),
         )
         return benchmark
 
@@ -106,7 +112,7 @@ class EcommerceRandom(RandomBenchmark):
 
     @staticmethod
     def get_csv():
-        orig_csv = Path(__file__).parent / "files" / "ecommerce_products.csv"  # update
+        orig_csv = Path(__file__).parent / "files" / "ecommerce_products.csv"
         return orig_csv
 
     @staticmethod
@@ -119,27 +125,22 @@ class EcommerceRandom(RandomBenchmark):
         os.makedirs(EcommerceRandom.dir(), exist_ok=True)
         return EcommerceRandom.load_from_disk(split)
 
-    @staticmethod
-    def load_from_disk(split: Literal["train", "dev", "test"]) -> "Benchmark":
+    @classmethod
+    def _load_database(cls, split: Literal["train", "dev", "test"]):
         assert split == "dev"
-        os.makedirs(EcommerceRandom.dir(), exist_ok=True)
-        benchmark = EcommerceRandom(
-            split,
-            ExperimentalDatabase.load_from_files(
-                db_name=EcommerceRandom.name(),
-                split=split,
-                table_names=["products"],
-                paths=[EcommerceRandom.get_csv()],
-                text_columns=[
-                    InPlaceColumn("products.description"),
-                ],
-                image_columns=[
-                    RemoteColumn("products.product_image", "products.product_image")
-                ],
-            ),
-            EcommerceRandom.generate_random_queries(split),
+        os.makedirs(cls.dir(), exist_ok=True)
+        return ExperimentalDatabase.load_from_files(
+            db_name=cls.name(),
+            split=split,
+            table_names=["products"],
+            paths=[cls.get_csv()],
+            text_columns=[
+                InPlaceColumn("products.description"),
+            ],
+            image_columns=[
+                RemoteColumn("products.product_image", "products.product_image")
+            ],
         )
-        return benchmark
 
     @classmethod
     def _get_query_shapes(cls) -> Sequence[QueryShape]:
@@ -167,7 +168,7 @@ class EcommerceRandomLarge(RandomBenchmark):
     def get_csv():
         orig_csv = (
             Path(__file__).parent / "files" / "ecommerce_products_large.csv"
-        )  # update
+        )
         return orig_csv
 
     @staticmethod
@@ -180,27 +181,22 @@ class EcommerceRandomLarge(RandomBenchmark):
         os.makedirs(EcommerceRandomLarge.dir(), exist_ok=True)
         return EcommerceRandomLarge.load_from_disk(split)
 
-    @staticmethod
-    def load_from_disk(split: Literal["train", "dev", "test"]) -> "Benchmark":
+    @classmethod
+    def _load_database(cls, split: Literal["train", "dev", "test"]):
         assert split == "dev"
-        os.makedirs(EcommerceRandomLarge.dir(), exist_ok=True)
-        benchmark = EcommerceRandomLarge(
-            split,
-            ExperimentalDatabase.load_from_files(
-                db_name=EcommerceRandomLarge.name(),
-                split=split,
-                table_names=["products"],
-                paths=[EcommerceRandomLarge.get_csv()],
-                text_columns=[
-                    InPlaceColumn("products.description"),
-                ],
-                image_columns=[
-                    RemoteColumn("products.product_image", "products.product_image")
-                ],
-            ),
-            EcommerceRandomLarge.generate_random_queries(split),
+        os.makedirs(cls.dir(), exist_ok=True)
+        return ExperimentalDatabase.load_from_files(
+            db_name=cls.name(),
+            split=split,
+            table_names=["products"],
+            paths=[cls.get_csv()],
+            text_columns=[
+                InPlaceColumn("products.description"),
+            ],
+            image_columns=[
+                RemoteColumn("products.product_image", "products.product_image")
+            ],
         )
-        return benchmark
 
     @classmethod
     def _get_query_shapes(cls) -> Sequence[QueryShape]:
@@ -275,7 +271,6 @@ ECOMMERCE_OPERATOR_OPTIONS = [
         LogicalFilter,
         "{products.description} contains warranty information",
     ),
-    # Extract from product_description
     OperatorOption(
         LogicalExtract,
         "Extract the [discount_amount] mentioned in {products.description} (e.g. 20% discount); return 0 if not mentioned",
@@ -286,15 +281,7 @@ ECOMMERCE_OPERATOR_OPTIONS = [
     ),
     OperatorOption(
         LogicalExtract,
-        "Extract the dominant [colour] from {products.description}",
-    ),
-    OperatorOption(
-        LogicalExtract,
         "Extract the [fitting] or fit type (e.g., regular, comfort, athletic, fitted) mentioned in {products.description}; return null if not mentioned",
-    ),
-    OperatorOption(
-        LogicalExtract,
-        "Extract the [brand_name] mentioned in {products.description}; return null if no brand is explicitly mentioned",
     ),
     OperatorOption(
         LogicalExtract,

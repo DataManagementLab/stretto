@@ -33,7 +33,10 @@ from reasondb.database.intermediate_state import (
 from reasondb.utils.logging import FileLogger
 
 if TYPE_CHECKING:
-    from reasondb.query_plan.physical_operator import PhysicalOperatorsNoPseudos
+    from reasondb.query_plan.physical_operator import (
+        PhysicalOperator,
+        PhysicalOperatorsNoPseudos,
+    )
 
 
 class OutputCardinalityTooSmall(Exception):
@@ -123,6 +126,78 @@ class UnoptimizedPhysicalPlanStep(PhysicalPlanStep):
     @property
     def logical_plan_step(self) -> LogicalPlanStep:
         return self._logical_plan_step
+
+    def attach_label_operator(
+        self,
+        operator: "PhysicalOperator",
+        llm_configuration: Dict[str, Any],
+    ) -> None:
+        """Append the operator the profiler will derive this step's labels from.
+
+        "Gold" is positional: `Profiler.profile_level` takes `step.operators[-1]`, which
+        the ascending-quality sort in `__init__` guarantees is the highest-quality
+        candidate. A label operator carries `LABEL_OPERATOR_QUALITY` precisely so it lands
+        there, displacing the best *model* to the second-to-last slot -- where, unlike the
+        last slot, it gets a learnable pick score and tunable parameters.
+
+        Called once per step from `PlanConfigurator.map_logical_to_physical`, deliberately
+        *not* from `__init__`: `rename_inputs` reconstructs the step from the same
+        `PhysicalOperatorsNoPseudos` object and is called on every access to
+        `TuningPipeline.steps_in_parallel`, so appending there would need an idempotency
+        guard on shared mutable state. Attaching after `parse` means renames carry the
+        operator along.
+        """
+        assert getattr(operator, "is_label_only", False), (
+            f"{operator} is not a label operator; attaching it here would make it "
+            "the profiler's label source while excluding it from execution."
+        )
+        assert not any(
+            getattr(op, "is_label_only", False) for op in self.operators
+        ), "This step already has a label operator."
+        assert all(op.quality < operator.quality for op in self.operators), (
+            "The label operator must outrank every candidate, or the quality sort will "
+            "not place it last and the profiler will label with the wrong operator."
+        )
+        self.operators.append(operator)
+        self.tuning_parameters.append({})
+        self.observations.append(None)
+        self.llm_configurations[operator.get_llm_parameters().name] = llm_configuration
+
+    def get_label_operator_index(self) -> Optional[int]:
+        """Index of this step's label operator, or None when it has none.
+
+        None means the step's labels come from the highest-quality model, which is then
+        also forced on as the final tier -- a plan can mix the two, e.g. when only some
+        steps have a ground-truth file.
+        """
+        for i, operator in enumerate(self.operators):
+            if getattr(operator, "is_label_only", False):
+                return i
+        return None
+
+    def get_last_executable_operator_index(self) -> int:
+        """Index of the last operator that may actually run.
+
+        This is `len(operators) - 1`, except when a label operator was *attached* to a
+        step that has model candidates -- there it is profiled but never planned, so
+        the slot below it is the one a plan may use.
+
+        A step whose only candidate is label-only is the other case, and it executes it:
+        that is the gold-label pass, whose whole toolbox is the perfect operators
+        (`evaluation.get_label_configurator`), and a plan that may run nothing at all is
+        not a plan. The two are told apart by the operator count: `attach_label_operator`
+        appends to a step `parse` already refused to build with zero candidates, so an
+        attached label operator always leaves at least one below it.
+        """
+        label_index = self.get_label_operator_index()
+        last = len(self.operators) - 1
+        if label_index is None or last == 0:
+            return last
+        assert label_index == last, (
+            "The label operator must be the last candidate; the quality sort should "
+            f"have placed it there but it is at {label_index} of {last}."
+        )
+        return last - 1
 
     def rename_inputs(
         self,
@@ -258,7 +333,6 @@ class UnoptimizedPhysicalPlanStep(PhysicalPlanStep):
                     inputs=self.inputs,
                     input_data=input_sample,
                     llm_parameters=llm_parameters,
-                    # tuning_parameters=self.tuning_parameters[op_idx],
                     database_state=database_state,
                     observation=observation,
                     labels=self.logical_plan_step.get_labels(),
@@ -291,8 +365,6 @@ class UnoptimizedPhysicalPlanStep(PhysicalPlanStep):
                 )
 
     def to_json(self):
-        # picked_operator = self.operators[op_idx]
-        # params = self.tuning_parameters[op_idx]
         available_operators = [
             {
                 "operator": self.operators[op_idx].get_operation_identifier(),

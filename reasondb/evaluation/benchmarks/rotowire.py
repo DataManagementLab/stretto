@@ -93,12 +93,14 @@ class Rotowire(Benchmark):
     def has_ground_truth(self) -> bool:
         return True
 
-    @staticmethod
-    def download(split: Literal["train", "dev", "test"]) -> Benchmark:
-        return Rotowire.load_from_disk(split)
+    @classmethod
+    def download(cls, split: Literal["train", "dev", "test"]) -> Benchmark:
+        return cls.load_from_disk(split)
 
-    @staticmethod
-    def load_from_disk(split: Literal["train", "dev", "test"]) -> "Benchmark":
+    @classmethod
+    def load_from_disk(cls, split: Literal["train", "dev", "test"]) -> "Benchmark":
+        # Via `cls` throughout so a subclass overriding only `name()`/`get_queries()`
+        # inherits this wiring -- see reasondb/evaluation/benchmarks/curated.py.
         (
             players_csv,
             teams_csv,
@@ -115,10 +117,10 @@ class Rotowire(Benchmark):
                 "teams_to_games.csv",
             ]
         )
-        benchmark = Rotowire(
+        benchmark = cls(
             split,
             ExperimentalDatabase.load_from_files(
-                db_name=Rotowire.name(),
+                db_name=cls.name(),
                 split=split,
                 table_names=[
                     "players",
@@ -136,7 +138,7 @@ class Rotowire(Benchmark):
                 ],
                 text_columns=[InPlaceColumn("reports.report")],
             ),
-            Rotowire.get_queries(),
+            cls.get_queries(),
         )
         return benchmark
 
@@ -158,8 +160,15 @@ class RotowireRandom(RandomBenchmark):
     def download(split: Literal["train", "dev", "test"]) -> Benchmark:
         return RotowireRandom.load_from_disk(split)
 
-    @staticmethod
-    def load_from_disk(split: Literal["train", "dev", "test"]) -> "Benchmark":
+    # Two operator pools (teams and players) over twelve shapes, so the usual ten per
+    # shape is 120 queries - twice what every other benchmark draws. Keep half.
+    #
+    # A *kept* count rather than a lowered draw count, so the RNG stream is unchanged;
+    # see RandomBenchmark.queries_kept_per_shape.
+    queries_kept_per_shape = 5
+
+    @classmethod
+    def _load_database(cls, split: Literal["train", "dev", "test"]):
         (
             players_csv,
             teams_csv,
@@ -176,30 +185,25 @@ class RotowireRandom(RandomBenchmark):
                 "teams_to_games.csv",
             ]
         )
-        benchmark = RotowireRandom(
-            split,
-            ExperimentalDatabase.load_from_files(
-                db_name=RotowireRandom.name(),
-                split=split,
-                table_names=[
-                    "players",
-                    "teams",
-                    "reports",
-                    "players_to_games",
-                    "teams_to_games",
-                ],
-                paths=[
-                    players_csv,
-                    teams_csv,
-                    reports_csv,
-                    players_to_games_csv,
-                    teams_to_games_csv,
-                ],
-                text_columns=[InPlaceColumn("reports.report")],
-            ),
-            RotowireRandom.generate_random_queries(split, num_queries_per_shape=5),
+        return ExperimentalDatabase.load_from_files(
+            db_name=cls.name(),
+            split=split,
+            table_names=[
+                "players",
+                "teams",
+                "reports",
+                "players_to_games",
+                "teams_to_games",
+            ],
+            paths=[
+                players_csv,
+                teams_csv,
+                reports_csv,
+                players_to_games_csv,
+                teams_to_games_csv,
+            ],
+            text_columns=[InPlaceColumn("reports.report")],
         )
-        return benchmark
 
     @classmethod
     def _get_query_shapes(
@@ -261,11 +265,7 @@ ROTOWIRE_TEAMS_OPERATOR_OPTIONS = [
     ),
     OperatorOption(
         LogicalExtract,
-        "From {joined_all.report} extract the number of points in 3rd quarter [Points_in_3rd_quarter] for {joined_all.name} ",
-    ),
-    OperatorOption(
-        LogicalExtract,
-        "From {joined_all.report} extract the number of turnovers [Turnovers] for {joined_all.name} ",
+        "From {joined_all.report} extract the number of turnovers [Turnovers] for the team {joined_all.name} ",
     ),
     OperatorOption(
         LogicalExtract,
@@ -276,16 +276,8 @@ ROTOWIRE_TEAMS_OPERATOR_OPTIONS = [
         "From {joined_all.report} extract the number of points in 1st quarter [Points_in_1st_quarter] for {joined_all.name} ",
     ),
     OperatorOption(
-        LogicalExtract,
-        "From {joined_all.report} extract the number of points in 2nd quarter [Points_in_2nd_quarter] for {joined_all.name} ",
-    ),
-    OperatorOption(
         LogicalFilter,
         "{joined_all.name} won the game according to {joined_all.report}",
-    ),
-    OperatorOption(
-        LogicalFilter,
-        "{joined_all.name} lost the game according to {joined_all.report}",
     ),
     OperatorOption(
         LogicalFilter,
@@ -298,10 +290,6 @@ ROTOWIRE_TEAMS_OPERATOR_OPTIONS = [
     OperatorOption(
         LogicalFilter,
         "{joined_all.name} had more than 25 assists according to {joined_all.report}",
-    ),
-    OperatorOption(
-        LogicalFilter,
-        "{joined_all.name} had more than 15 turnovers according to {joined_all.report}",
     ),
     OperatorOption(
         LogicalFilter,
@@ -334,7 +322,6 @@ ROTOWIRE_TEAMS_OPERATOR_OPTIONS = [
 # "Minutes played", "Personal fouls", "Turnovers", "Blocks", "Offensive rebounds", "Field goal percentage",
 # "Free throw percentage"
 ROTOWIRE_PLAYERS_OPERATOR_OPTIONS = [
-    # extract
     OperatorOption(
         LogicalExtract,
         "From {joined_all.report} extract the number of assists [Assists] for {joined_all.name} ",
@@ -353,23 +340,11 @@ ROTOWIRE_PLAYERS_OPERATOR_OPTIONS = [
     ),
     OperatorOption(
         LogicalExtract,
-        "From {joined_all.report} extract the number of defensive rebounds [Defensive_rebounds] for {joined_all.name} ",
-    ),
-    OperatorOption(
-        LogicalExtract,
         "From {joined_all.report} extract the number of field goals attempted [Field_goals_attempted] for {joined_all.name} ",
     ),
     OperatorOption(
         LogicalExtract,
         "From {joined_all.report} extract the number of field goals made [Field_goals_made] for {joined_all.name} ",
-    ),
-    OperatorOption(
-        LogicalExtract,
-        "From {joined_all.report} extract the number of free throws attempted [Free_throws_attempted] for {joined_all.name} ",
-    ),
-    OperatorOption(
-        LogicalExtract,
-        "From {joined_all.report} extract the number of free throws made [Free_throws_made] for {joined_all.name} ",
     ),
     OperatorOption(
         LogicalExtract,
@@ -381,25 +356,12 @@ ROTOWIRE_PLAYERS_OPERATOR_OPTIONS = [
     ),
     OperatorOption(
         LogicalExtract,
-        "From {joined_all.report} extract the number of turnovers [Turnovers] for {joined_all.name} ",
+        "From {joined_all.report} extract the number of turnovers [Turnovers] for the player {joined_all.name} ",
     ),
     OperatorOption(
         LogicalExtract,
         "From {joined_all.report} extract the number of blocks [Blocks] for {joined_all.name} ",
     ),
-    OperatorOption(
-        LogicalExtract,
-        "From {joined_all.report} extract the number of offensive rebounds [Offensive_rebounds] for {joined_all.name} ",
-    ),
-    OperatorOption(
-        LogicalExtract,
-        "From {joined_all.report} extract the field goal percentage [Field_goal_percentage] for {joined_all.name} ",
-    ),
-    OperatorOption(
-        LogicalExtract,
-        "From {joined_all.report} extract the free throw percentage [Free_throw_percentage] for {joined_all.name} ",
-    ),
-    # filter
     OperatorOption(
         LogicalFilter,
         "{joined_all.name} had more than 10 assists according to {joined_all.report}",
@@ -439,10 +401,6 @@ ROTOWIRE_PLAYERS_OPERATOR_OPTIONS = [
     OperatorOption(
         LogicalFilter,
         "{joined_all.name} played more than 30 minutes according to {joined_all.report}",
-    ),
-    OperatorOption(
-        LogicalFilter,
-        "{joined_all.name} had more than 5 turnovers according to {joined_all.report}",
     ),
 ]
 
@@ -1023,7 +981,8 @@ ROTOWIRE_TEAMS_QUERY_SHAPES = [
             ),
         ),
         additional_info={
-            "num_semops": 3,
+            # 2 filters + 2 extracts, matching the players-pool shape above.
+            "num_semops": 4,
             "num_sem_filter": 2,
             "num_sem_extract": 2,
             "num_tradops": 2,

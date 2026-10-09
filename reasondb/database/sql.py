@@ -82,7 +82,24 @@ class SqlQuery:
             for column in self._project:
                 column.check_exists(connection, self._table_renamings)
 
-        assert len(set(c.alias for c in self._project)) == len(self._project)
+        # Two projected columns cannot share an output name. The error names the
+        # offending aliases, which identify the extract that was realized twice
+        # (e.g. by a cascade, see `ExtractObservation.get_sql`).
+        by_alias = defaultdict(list)
+        for column in self._project:
+            by_alias[column.alias].append(column)
+        duplicates = {alias: cols for alias, cols in by_alias.items() if len(cols) > 1}
+        assert not duplicates, (
+            f"Projection has {len(duplicates)} duplicated column alias(es): "
+            + "; ".join(
+                # The *names*, not just the tables: an extract projects its hidden
+                # column under the logical alias, and the hidden column name is what
+                # identifies which operator produced it.
+                f"{alias!r} projected {len(cols)}x as {[c.name for c in cols]}"
+                for alias, cols in duplicates.items()
+            )
+            + f" (projection of {len(self._project)} columns)."
+        )
 
     def get_image_columns(self) -> Sequence[ConcreteColumn]:
         columns = self.get_project_columns()
@@ -669,7 +686,6 @@ class SqlQuery:
         join_str = self._join_conditions.to_str(self._table_renamings)
 
         result = "SELECT {index_columns}, {columns} {random_col} {flag_columns} FROM {tables}{where}{groupby}{orderby}{limit}{offset}".format(
-            # distinct=" DISTINCT" if self._distinct else "",
             columns=columns,
             flag_columns=flag_columns,
             tables=join_str,
@@ -726,21 +742,27 @@ class SqlQuery:
         for cond in self._conditions:
             cond_list.append(cond.cond_text(gold_mixing))
 
-        if self._sample is not None:  
+        if self._sample is not None:
             assert positive
             assert not cheat_selective_filter
             cond_list.append(self._sample.to_str(selected_tables))
 
         if fix_samples is not None:
             assert positive
-            for i, sample_index in enumerate(fix_samples.index_columns):
-                renamed_sample_index = sample_index.rename(self._table_renamings)
-                for renamed_index in renamed_sample_index:
-                    if renamed_index.table_identifier not in selected_tables:
-                        continue
-                    cond_list.append(
-                        f"{renamed_index.project_no_alias} IN ({', '.join(map(str, fix_samples.index_column_values[str(i)].tolist()))})"
-                    )
+            row_conds = []
+            for _, values in fix_samples.index_column_values.iterrows():
+                idx_col_conds = []
+                for sample_index, v in zip(fix_samples.index_columns, values):
+                    renamed_sample_index = sample_index.rename(self._table_renamings)
+                    for renamed_index in renamed_sample_index:
+                        if renamed_index.table_identifier in selected_tables:
+                            idx_col_conds.append(
+                                f"{renamed_index.project_no_alias} == {v}"
+                            )
+                row_cond = "(" + " AND ".join(idx_col_conds) + ")"
+                row_conds.append(row_cond)
+            fix_sample_cond = "(" + " OR ".join(row_conds) + ")"
+            cond_list.append(fix_sample_cond)
 
         cond = (" AND " if positive else " OR ").join(cond_list)
         return cond
@@ -789,12 +811,6 @@ class SqlQuery:
                 neg_cond_soft = cond.to_soft_negative_str(
                     shortened=shortened, gold_mixing=gold_mixing
                 )
-
-                # if only_unsure == cond.logical_plan_step.identifier:
-                #     assert not cheat_selective_filter
-                #     # unsure == not inside hard condition, but inside soft
-                #     pos_cond = f"(NOT {pos_cond} AND {pos_cond_soft})"
-                #     neg_cond = f"(NOT {neg_cond} OR {neg_cond_soft})"
 
                 if not finalized:
                     pos_cond = pos_cond_soft
@@ -907,8 +923,6 @@ class SqlQuery:
     @property
     def orig_tables(self) -> List[ConcreteTableIdentifier]:
         return [self._table_renamings.get(table, table) for table in self.tables]
-
-
 
 
 class Condition:

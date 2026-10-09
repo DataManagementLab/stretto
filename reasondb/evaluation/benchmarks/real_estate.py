@@ -89,8 +89,8 @@ class RealEstate(Benchmark):
         )
         return RealEstate.load_from_disk(split)
 
-    @staticmethod
-    def load_from_disk(split: Literal["train", "dev", "test"]) -> "Benchmark":
+    @classmethod
+    def load_from_disk(cls, split: Literal["train", "dev", "test"]) -> "Benchmark":
         listings_table = RealEstate.load_listings_table(
             Path("palimpzest/testdata/real-estate-eval")
         )

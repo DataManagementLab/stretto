@@ -52,6 +52,9 @@ class ImageQaExtract(PhysicalOperator):
     def prefers_run_outside_db(self) -> bool:
         return True
 
+    def get_modality(self) -> str:
+        return "image"
+
     async def get_observation(
         self,
         database_state: IntermediateState,

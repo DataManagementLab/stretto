@@ -1,0 +1,42 @@
+# Whether the KV cache servers reconstruct a compressed cache on the fly from a
+# less-compressed baseline + relative indices, instead of reading a cache materialized
+# at exactly the requested compression ratio. Must match how the benchmark is run:
+#
+#   bash scripts/start_servers_text.sh                 # physical cache per ratio
+#     -> python scripts/run_coordinator.py --local --producer run_benchmark ...
+#   USE_INDICES=1 bash scripts/start_servers_text.sh   # baseline + relative indices
+#     -> python scripts/run_coordinator.py --local --producer run_benchmark ... --use-indexes
+#
+# Mismatched: with indices on but --use-indexes off, the servers never generate the
+# missing physical caches and the client fails setup with "no usable cache or relative
+# index"; with indices off but --use-indexes on, the servers re-prefill each ratio.
+USE_INDICES=${USE_INDICES:-0}
+
+INDEX_FLAG=""
+if [ "$USE_INDICES" != "0" ]; then
+  INDEX_FLAG="--use-relative-indices"
+fi
+
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# RAM budget (GB) for KV caches that an -in-memory operator pins at prepare(). The default
+# operator suite uses no -in-memory operators, so 0 serves every operator from disk. A
+# server without a budget refuses -in-memory operators at setup(). Pinned caches are never
+# evicted, so size the budget to hold the whole column's cache set.
+export KV_CACHE_PIN_GB=${KV_CACHE_PIN_GB:-0}
+
+
+# Per-host GPU overrides (defaults: the GPU layout of our experiment machine). Set these
+# before invoking the script to run on a different GPU topology; a coordinator worker
+# sources them from a per-host env file (see reasondb/coordinator/capabilities.py).
+TEXT_8B_GPUS=${TEXT_8B_GPUS:-3}
+TEXT_70B_GPUS=${TEXT_70B_GPUS:-0,1,2}
+EMBED_GPUS=${EMBED_GPUS:-3}
+
+CUDA_VISIBLE_DEVICES=$TEXT_8B_GPUS python reasondb/backends/kv_cache_text_qa_server.py --model-name meta-llama/Llama-3.1-8B-Instruct $INDEX_FLAG &
+KV8B_TEXT_QA_SERVER_PID=$!
+CUDA_VISIBLE_DEVICES=$TEXT_70B_GPUS python reasondb/backends/kv_cache_text_qa_server.py --model-name meta-llama/Llama-3.1-70B-Instruct $INDEX_FLAG &
+KV70B_TEXT_QA_SERVER_PID=$!
+
+CUDA_VISIBLE_DEVICES=$EMBED_GPUS python reasondb/backends/image_similarity_server.py &
+CUDA_VISIBLE_DEVICES=$EMBED_GPUS python reasondb/backends/text_embed_server.py
+

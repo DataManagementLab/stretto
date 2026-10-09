@@ -1,0 +1,341 @@
+# Cluster configuration: which experiments run where, and with which flags.
+#
+# Read by both launchers, which ssh into the nodes and start what this file describes:
+#
+#   ./scripts/start-configurators.sh --dry-run   # one coordinator per experiment
+#   ./scripts/start-workers.sh --dry-run         # workers that drain all of them
+#
+# Experiment i lands on node i (<prefix>1, <prefix>2, ...) unless it names a `node:` or a
+# `host:` of its own, and a worker sharing a node with a coordinator addresses it as
+# localhost (bypassing any proxy). Both scripts compute that mapping from this file, so
+# they always agree on it.
+#
+# `args:` defines what an experiment runs. Anything scripts/run_coordinator.py accepts
+# goes there: flag names with underscores or hyphens, a list for a flag that takes
+# several values, `true` for a bare flag, `false` to switch a shared one back off, and a
+# nested mapping for the NAME=VALUE flags (--simulate, --precompute).
+#
+# Not expressible here: any value containing a quote, a backslash or a shell
+# metacharacter - the launchers build a single-quoted remote command that cannot carry
+# one. A `$VAR` is allowed and is expanded on the node, e.g. for a path under the node's
+# own $HOME.
+
+cluster:
+  # Node i is "<prefix><i>". Replace with an explicit `hosts: [a, b, c]` list for a
+  # cluster whose nodes are not numbered.
+  prefix: sweep-
+  port: 5099
+
+  # Use an absolute path, never "~": an ssh command may start in a container workdir with
+  # a different $HOME, where a tilde does not resolve to the repository.
+  repo: /path/to/workspace/reasondb
+
+  # Sourced explicitly because it holds conda's init block, which a non-interactive ssh
+  # shell does not read on its own.
+  bashrc: /path/to/workspace/.bashrc
+
+  # Exported before anything else runs. reasondb resolves its KV cache root as
+  # $HOME/.reasondb/cache when REASONDB_CACHE_DIR is unset, and coordinator and workers
+  # must agree on that root (with the wrong one, no materialized caches are found and no
+  # jobs are enqueued). A --simulate run whose cache sizes are recorded
+  # (reasondb/evaluation/kv_cache_sizes.json, written by scripts/measure_kv_cache_sizes.py)
+  # plans from that recording and does not read the cache root.
+  home: /path/to/workspace
+
+  # Overrides the cache root derived from `home`. Empty = leave REASONDB_CACHE_DIR to
+  # .bashrc (or to the $HOME default).
+  cache_dir:
+
+  conda_env: reasondb
+
+  # Empty means "whatever ~/.ssh/config or the local username says" - only set this when
+  # the cluster account differs from the one you are launching from.
+  user:
+
+workers:
+  # Which nodes get a worker, and how many workers each of them runs. The backend
+  # servers are started once per node and reused, so per_node > 1 means several workers
+  # sharing one set of servers - useful for --simulate work, not for a warm 70B cache.
+  #
+  # A bare number is a count, i.e. the first N nodes (15 = nodes 1 .. 15). To run on
+  # particular nodes, list the ids instead: `nodes: 8-12` or `nodes: 1,3,5-7`. The
+  # launcher's --nodes uses the same syntax.
+  nodes: 15
+  per_node: 1
+
+  capability: simulate
+  device: cuda:0
+
+  # RAM budget in GB for the KV caches an `-in-memory` operator pins at prepare(),
+  # exported as KV_CACHE_PIN_GB to the start_servers_*.sh a worker runs (--pin-gb
+  # overrides it for one launch). This is PER SERVER PROCESS, not per node: a
+  # `capability: both` node running four KV servers needs four times this much RAM.
+  #
+  # The default operator suite serves every operator from disk, so none of the
+  # experiments below uses an `-in-memory` operator. A non-zero budget keeps such
+  # operators usable (a server with budget 0 refuses them at setup()); nothing is held
+  # unless an operator asks for it, and `simulate` workers start no KV server at all.
+  kv_cache_pin_gb: 50
+
+  # false: every worker drains the experiments in the order they are listed below, so the
+  # whole fleet finishes the first one before starting the second.
+  #
+  # true: each worker's task order is shifted by its index, so all coordinators get work
+  # at once (with 15 workers and 5 experiments, 3 workers each). Nothing finishes early,
+  # but no worker idles on the tail of the first task. Override per launch with
+  # --rotate / --no-rotate.
+  rotate: false
+
+  # Anything else scripts/run_worker.py takes, e.g.
+  #   use_indexes: true              # must match how the caches were recorded
+  #   server_ready_timeout_s: 3600
+  args:
+
+coordinator:
+  # Flags every experiment below is launched with. An experiment's own `args:` wins.
+  #
+  # Do not put the --simulate mapping here: a recording run passes --precompute instead,
+  # a run may not do both, and a shared flag can be overridden per experiment but not
+  # removed. Each experiment names the stores it replays.
+  args:
+
+# The experiments of the paper. Each one is a named producer rather than a flag
+# combination, so the entry says what the run is for and the axes it holds fixed are
+# defined in code - see reasondb/coordinator/producers/experiments.py.
+#
+# Every replaying entry spells out its own `simulate:` mapping, so this file fully
+# specifies the datasets of each experiment: `resolve_precompute_simulate` derives
+# --benchmarks from that mapping whenever --benchmarks is left at its default.
+# `tests/test_cluster_config.py` checks that the mappings stay consistent.
+#
+# PREREQUISITE: the precompute stores every entry replays must hold all operators of the
+# default suite, including the small models' **vanilla** operators
+# (`TextQaFilter-...-8B-cr0.0-vanilla` and its image/extract/join siblings). A store that
+# lacks some operators can be topped up with
+#
+#   python scripts/run_coordinator.py --task-id topup --producer parameter_sweep \
+#     --precompute <bench>=<existing>.json --device cuda:0
+#
+# which records only the missing operators - `precomputed_ops` markers are per operator,
+# so everything already on disk is skipped.
+#
+# Default-suite baselines: text 8B cr 0.8 / 70B cr 0.8, image 8B cr 0.9 / 70B cr 0.99,
+# all served from disk.
+
+experiments:
+  # Main comparison: Stretto against the two baselines, at its default configuration.
+  # One axis - the optimizer - over the default operator suite, tuning on, one
+  # profiling budget, crossed with the guarantee pairs.
+  #
+  # The `baselines` producer fixes the default operator suite. The same three approaches
+  # on the bare `parameter_sweep` engine would also sweep every greedy state, which is
+  # ops01's experiment. The default suite (the walk's last cached state plus the small
+  # models' vanilla operators) is the deployed configuration, not one of ops01's states.
+  - task_id: base01
+    producer: baselines
+    args:
+      simulate:
+        artwork_random_medium: artwork_precompute_kv.json
+        rotowire_random: rotowire_precompute_kv.json
+        movie_random_huge: movie_huge_precompute_kv.json
+        email_random: email_precompute_kv.json
+        ecommerce_random_large: ecomm_precompute_kv.json
+
+  # Effect of the profiling sample size. One axis, over the same default suite as base01,
+  # so a point on this curve and base01's optim_global arm coincide at 100 rows.
+  #
+  # The grid is roughly geometric: going from 10 to 25 rows changes the estimate far more
+  # than 100 -> 150. 150 extends the producer's default [10, 25, 50, 100] by one point
+  # past DEFAULT_SAMPLE_SIZE, to check that the curve has flattened at the default.
+  # An explicit --sample-sizes overrides the producer's default.
+  - task_id: samp01
+    producer: sample_size
+    args:
+      sample-sizes: [10, 25, 50, 100, 150]
+      simulate:
+        artwork_random_medium: artwork_precompute_kv.json
+        rotowire_random: rotowire_precompute_kv.json
+        movie_random_huge: movie_huge_precompute_kv.json
+        email_random: email_precompute_kv.json
+        ecommerce_random_large: ecomm_precompute_kv.json
+
+  # Benefit and cost of a larger operator search space: the greedy storage walk from
+  # every materialized baseline down to the gold model alone. This is the operator-count
+  # axis, since in direct (non-indexed) serving each retained level is one dedicated
+  # cache and one operator.
+  #
+  # Held at the producer's single budget (100 = DEFAULT_SAMPLE_SIZE), so this curve and
+  # samp01's x=100 point describe the same profiling behaviour and the default suite can
+  # be located on it. The number of states depends on what a benchmark has materialized:
+  # 7 for a single-modality benchmark, 13 for ecommerce.
+  #
+  # The greedy walk visits *every* materialized level on disk, so the replayed stores
+  # must have full coverage (recorded with `--precompute-states all`); mode01 and kvop01
+  # need the same. A store recorded with a narrower `--precompute-states` can
+  # be widened with
+  #
+  #   python scripts/run_coordinator.py --task-id topup --producer parameter_sweep \
+  #     --precompute movie_random_huge=movie_huge_precompute_kv.json \
+  #     --precompute-states all --device cuda:0
+  #
+  # which records only the missing levels, since `precomputed_ops` markers are per
+  # operator.
+  #
+  # The states come from the greedy walk over what is materialized, not from
+  # `DEFAULT_*_ACTIVE_DIRECT`, and all of them use disk-served operators.
+  - task_id: ops01
+    producer: operator_count
+    args:
+      simulate:
+        artwork_random_medium: artwork_precompute_kv.json
+        rotowire_random: rotowire_precompute_kv.json
+        movie_random_huge: movie_huge_precompute_kv.json
+        email_random: email_precompute_kv.json
+        ecommerce_random_large: ecomm_precompute_kv.json
+
+  # Does optimizing against human labels change whether the guarantee actually holds?
+  # One axis - which reference the optimizer tunes against - with both arms scored by the
+  # same gold and silver passes.
+  #
+  # This is the only entry that runs the *curated* datasets; every other entry runs the
+  # random benchmarks. `resolve_precompute_simulate` asserts that --benchmarks and
+  # --simulate describe the same set, so the two lists cannot be shared.
+  #
+  # The five stores must exist on the node: --simulate checks for each file when the
+  # coordinator parses its flags.
+  #
+  # One recording serves both arms and the silver label pass: precomputed work is keyed by
+  # (operator, expression, base tables), both arms build the same
+  # `get_default_configurator` suite, and `_precompute_pipeline` records every candidate
+  # rather than an optimizer's pick. The gold labels are files, not model calls. Because
+  # it replays, it needs no real inference and `simulate` workers can drain it.
+  #
+  # --benchmarks is left at its default, so the mapping below selects the datasets; keep
+  # it in sync with `label_reference.DEFAULT_BENCHMARKS` and with the recorded datasets.
+  # `movie_huge_curated` is by far the largest of them (10000 reviews against 65-1000
+  # elsewhere); drop its line for a cheaper run.
+  - task_id: ref01
+    producer: label_reference
+    args:
+      precision-guarantees: [0.5, 0.7, 0.9]
+      recall-guarantees: [0.5, 0.7, 0.9]
+      simulate:
+        artwork_curated: artwork_curated_kv.json
+        email_curated: email_curated_kv.json
+        rotowire_curated: rotowire_curated_kv.json
+        ecommerce_curated: ecommerce_curated_kv.json
+        movie_huge_curated: movie_huge_curated_kv.json
+
+  # What does each component of Stretto contribute? Three arms per benchmark - the default
+  # suite under the optimizer, the same optimizer with the KV-compressed operators
+  # removed, and no optimizer at all - so each gap has exactly one cause. Arms 1 and 2
+  # differ only in the KV-cached operators.
+  #
+  # Runs on the random benchmarks: this producer wraps the sweep engine, so it replays the
+  # same recordings as the other entries. --benchmarks is left at its default, so the
+  # mapping below selects the datasets.
+  #
+  # Guarantees match ref01's grid so the two experiments' arms can be read side by side.
+  - task_id: abl01
+    producer: ablation
+    args:
+      precision-guarantees: [0.5, 0.7, 0.9]
+      recall-guarantees: [0.5, 0.7, 0.9]
+      simulate:
+        artwork_random_medium: artwork_precompute_kv.json
+        rotowire_random: rotowire_precompute_kv.json
+        movie_random_huge: movie_huge_precompute_kv.json
+        email_random: email_precompute_kv.json
+        ecommerce_random_large: ecomm_precompute_kv.json
+
+  # How much does optimizing the *whole pipeline* gain over optimizing it step by step?
+  # base01's setup, run over the three GlobalOptimizationModes of one optimizer instead
+  # of over three different optimizers:
+  #
+  #   optim_global         operator choice and tuning parameters searched jointly across
+  #                        the pipeline, against the end-to-end guarantee.
+  #   optim_shift_budget   the guarantee split into a per-step budget, shifted between
+  #                        steps.
+  #   optim_local          each step optimized independently.
+  #
+  # `--state-plan full` is the widest search space - every level the benchmark has
+  # materialized, plus the small models' vanilla operators - evaluated as a single point,
+  # so a per-step optimizer has many candidates to choose wrongly from. The profiling
+  # budget is 150 rows (instead of the default 100), since a wider space has more
+  # candidates to tell apart. Like ops01, `full` reaches every materialized level, so it
+  # requires full-coverage stores. Direct mode only: under --use-indexes `full` and
+  # `default` would be the same state.
+  - task_id: mode01
+    producer: baselines
+    args:
+      approaches: [optim_global, optim_local, optim_shift_budget]
+      state-plan: full
+      sample-sizes: [150]
+      simulate:
+        artwork_random_medium: artwork_precompute_kv.json
+        rotowire_random: rotowire_precompute_kv.json
+        movie_random_huge: movie_huge_precompute_kv.json
+        email_random: email_precompute_kv.json
+        ecommerce_random_large: ecomm_precompute_kv.json
+
+  # What does ONE KV-compressed operator buy, and what does it cost on disk? Every state
+  # is the default suite without compression plus one KV-compressed operator per
+  # modality, over the (model size x compression ratio) grid ops01 walks; step 0 is that
+  # suite alone (abl01's arm 2), the reference every other state is read against. So
+  # `storage_bytes` is the added cache alone and the speedup is what adding it buys.
+  #
+  # Direct mode only: under --use-indexes one materialized level serves every effective
+  # ratio above it, so a state would no longer add a single operator. Like ops01, it
+  # visits every materialized level, so the replayed stores need full coverage.
+  - task_id: kvop01
+    producer: kv_operator
+    args:
+      state-plan: kv_operator_marginal
+      precision-guarantees: [0.5, 0.7, 0.9]
+      recall-guarantees: [0.5, 0.7, 0.9]
+      simulate:
+        artwork_random_medium: artwork_precompute_kv.json
+        rotowire_random: rotowire_precompute_kv.json
+        movie_random_huge: movie_huge_precompute_kv.json
+        email_random: email_precompute_kv.json
+        ecommerce_random_large: ecomm_precompute_kv.json
+
+  # A further experiment is a further entry - it is appended at the end, lands on the next node and the workers
+  # pick it up with no change to either script. For example:
+  #
+  # - task_id: guar01
+  #   producer: parameter_sweep
+  #   args:
+  #     benchmarks: [movie_random_huge, artwork_random_medium]
+  #     precision-guarantees: [0.7, 0.8, 0.9]
+  #     recall-guarantees: [0.7, 0.8, 0.9]
+  #     approaches: [optim_global, lotus, abacus]
+  #     sweep-to-gold: true
+  #     simulate:
+  #       movie_random_huge: movie_huge_precompute_kv.json
+  #       artwork_random_medium: artwork_precompute_kv.json
+  #
+  # Here `benchmarks:` and the `--simulate` mapping name the same two datasets, as
+  # `resolve_precompute_simulate` requires. Without `benchmarks:` the mapping alone
+  # selects the datasets, as in every entry above.
+
+# ── Recording passes ─────────────────────────────────────────────────────────────
+#
+# The entries above replay existing precompute stores. To add a pass that records a
+# store:
+#
+#   1. Give it no `simulate:` mapping: a run cannot both replay a store and write it
+#      (`resolve_precompute_simulate` rejects the pair). This is also why
+#      `coordinator.args` above holds no shared --simulate.
+#   2. Use the *engine* as `--producer`, not the experiment wrapper. `run_coordinator.py`
+#      accepts --precompute for `parameter_sweep` and `run_benchmark` only
+#      (_PRECOMPUTE_PRODUCERS); every named experiment producer rejects it. Record with
+#      the engine the experiment wraps.
+#   3. It needs real inference, so `workers.capability: simulate` workers will not claim
+#      its jobs. Launch it separately with its own workers:
+#
+#        ./scripts/start-configurators.sh --experiments <id>
+#        ./scripts/start-workers.sh --experiments <id> --capability both --nodes 2
+#
+# `host:` pins such an entry's coordinator to the machine whose caches it records
+# against, instead of the positional node its list position would give it.

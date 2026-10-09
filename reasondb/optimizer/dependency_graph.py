@@ -74,7 +74,7 @@ class DependencyGraph:
 
     def compute_tuning_workflow(self, database: "Database") -> TuningWorkflow:
         """Pulls up the multi-modal operators and the operators depending on them to the root of the plan tree.
-        Then id subdivides the plan into sections that can be tuned one after the other.
+        Then it subdivides the plan into sections that can be tuned one after the other.
         :return: A tuning plan, which is a subdivided plan with sections that can be tuned.
         """
 
@@ -215,7 +215,7 @@ class DependencyGraph:
 
             if isinstance(
                 step.logical_plan_step, LogicalProject
-            ):  # Ignore projects for now
+            ):  # Projections each form their own pipeline
                 step_idx_to_pipeline_idx[step.index] = len(parallel_pipelines)
                 parallel_pipelines.append([step])
                 continue
@@ -555,8 +555,8 @@ class DependencyGraph:
                     ):
                         dependencies[i].add(j)
 
-            # Operators having inputs originating from differnt tables depend on joins
-            # Keep track of which pairs of tables are combined by eith joins
+            # Operators having inputs originating from different tables depend on joins
+            # Keep track of which pairs of tables are combined by joins
             if isinstance(step.logical_plan_step, LogicalJoin):
                 sorted_input_pair = tuple(sorted(step.logical_plan_step.inputs))
                 join_key_origins_left = {

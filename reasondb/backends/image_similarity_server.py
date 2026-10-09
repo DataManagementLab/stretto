@@ -25,7 +25,6 @@ from PIL import ImageFile
 MODEL_NAME = "Salesforce/blip-itm-base-coco"
 BATCH_SIZE = 10
 DATALOADER_NUM_WORKERS = 8
-# Image.MAX_IMAGE_PIXELS = None
 IMAGE_MAX_PIXELS = 1400 * 1400
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -82,7 +81,6 @@ class ImageSimilarityModelWrapper:
         all_indexes = []
         all_embed_cols = []
         for data in dataloader:
-            # try:
             if "pixel_values" not in data:
                 continue  # Skip if no images are loaded
 
@@ -94,8 +92,6 @@ class ImageSimilarityModelWrapper:
         result_indexes = all_indexes
         result_embed_cols = all_embed_cols
         return result_embeddings, result_indexes, result_embed_cols
-        # except Exception as e:
-        #     print(f"Error processing images: {e}")  # Log the error
 
     def embed_images(self, inputs, device):
         with torch.no_grad():

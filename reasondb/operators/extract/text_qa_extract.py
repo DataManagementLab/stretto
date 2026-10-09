@@ -60,6 +60,9 @@ class TextQaExtract(PhysicalOperator):
     def prefers_run_outside_db(self) -> bool:
         return True
 
+    def get_modality(self) -> str:
+        return "text"
+
     async def get_observation(
         self,
         database_state: IntermediateState,

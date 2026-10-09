@@ -1,0 +1,1312 @@
+/* Stretto run monitor — design tokens and layout.
+ *
+ * Colors are a validated data-viz palette (six categorical slots, checked against both
+ * surfaces for lightness band, chroma floor, CVD separation and normal-vision
+ * separation). Three light-mode slots sit below 3:1
+ * against the light surface, so every chart ships a table view as relief — see the
+ * "Table" toggle on each card.
+ *
+ * Dark mode is selected, not flipped: the same six hues re-stepped for the dark surface.
+ */
+
+:root {
+  color-scheme: light;
+
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.1);
+  --hover: rgba(11, 11, 11, 0.04);
+  --selected: rgba(42, 120, 214, 0.1);
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+
+  --seq-1: #cde2fb;
+  --seq-2: #9ec5f4;
+  --seq-3: #6da7ec;
+  --seq-4: #3987e5;
+  --seq-5: #256abf;
+  --seq-6: #184f95;
+  --seq-7: #0d366b;
+
+  --good: #0ca30c;
+  --warning: #fab219;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.1);
+    --hover: rgba(255, 255, 255, 0.06);
+    --selected: rgba(57, 135, 229, 0.18);
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d;
+  --surface: #1a1a19;
+  --ink: #ffffff;
+  --ink-2: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --baseline: #383835;
+  --border: rgba(255, 255, 255, 0.1);
+  --hover: rgba(255, 255, 255, 0.06);
+  --selected: rgba(57, 135, 229, 0.18);
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--page);
+}
+
+/* ── Header & navigation ──────────────────────────────────────────────────── */
+
+.header-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+header.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.brand .sub {
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 8px;
+}
+
+nav.tabs {
+  display: flex;
+  gap: 2px;
+}
+
+nav.tabs a {
+  display: block;
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  color: var(--ink-2);
+  text-decoration: none;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+nav.tabs a:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+nav.tabs a[aria-current="page"] {
+  background: var(--selected);
+  color: var(--ink);
+}
+
+nav.tabs a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--series-1);
+  outline-offset: 2px;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.status-pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+
+.status-pill[data-state="running"] .dot {
+  background: var(--good);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+.status-pill[data-state="ok"] .dot {
+  background: var(--good);
+}
+.status-pill[data-state="error"] .dot {
+  background: var(--critical);
+}
+.status-pill[data-state="interrupted"] .dot {
+  background: var(--warning);
+}
+.status-pill[data-state="offline"] .dot {
+  background: var(--muted);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-pill[data-state="running"] .dot {
+    animation: none;
+  }
+}
+
+/* One-line run identity in the topbar. With several workers running different queries
+   at once there is no single "current query" to show; per-query detail belongs on the
+   Query tab. */
+.run-context {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
+
+main {
+  padding: 20px;
+  max-width: 1500px;
+  margin: 0 auto;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field > label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+select,
+input[type="search"],
+input[type="text"] {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  max-width: 460px;
+}
+
+button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+button[aria-pressed="true"] {
+  background: var(--selected);
+  color: var(--ink);
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
+}
+
+.grid.wide {
+  grid-template-columns: 1fr;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  min-width: 0;
+}
+
+.card > h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card > .card-sub {
+  margin: 2px 0 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+/* Only the title block absorbs the slack. Scoped to :first-child because the controls
+   that follow are <div>s too (.segmented), and a bare `> div` rule would outrank their
+   own `flex: none` on specificity. */
+.card-head > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.card-head > .segmented {
+  flex: 0 0 auto;
+}
+
+.card-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card-head .card-sub {
+  margin: 2px 0 0;
+}
+
+/* ── In-card segmented control (modality / model pickers) ───────────────────── */
+/* A card that can show one of several slices (e.g. "Text QA" vs "Image QA") uses
+   this instead of a top-level filter, since it scopes only that card, not the page. */
+
+.segmented {
+  display: inline-flex;
+  /* Never wrap: a two-option switch that stacks its options vertically reads as a
+     broken list rather than a control. The card head wraps instead. */
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  gap: 2px;
+  padding: 2px;
+  background: var(--hover);
+  border-radius: 8px;
+  flex: none;
+}
+
+.segmented button {
+  border: none;
+  background: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.segmented button:hover {
+  color: var(--ink);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* ── Stat tiles ───────────────────────────────────────────────────────────── */
+
+.tiles {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 16px;
+}
+
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.tile .label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tile .value {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-top: 2px;
+}
+
+.tile .note {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.hero {
+  font-size: 48px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+/* ── Progress ─────────────────────────────────────────────────────────────── */
+
+.progress {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--grid);
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.progress > span {
+  display: block;
+  height: 100%;
+  background: var(--series-1);
+}
+
+/* A segmented bar's pieces sit flush against each other (no per-segment radius) - the
+   rounding on the .progress container plus overflow:hidden already caps the ends. */
+.progress.segmented > span {
+  flex: none;
+}
+
+/* Click-to-expand disclosure (see ui.js's `details`, which remembers open state across
+   re-renders). <summary> holds the always-visible label; everything else in the
+   <details> only renders once expanded. */
+.progress-detail {
+  margin-top: 10px;
+}
+
+.progress-detail summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.progress-detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.progress-detail summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.progress-detail[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.progress-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+
+/* ── Charts ───────────────────────────────────────────────────────────────── */
+
+.chart {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.axis-text {
+  font-size: 13px;
+  fill: var(--muted);
+}
+
+.axis-title {
+  font-size: 13px;
+  fill: var(--ink-2);
+}
+
+.gridline {
+  stroke: var(--grid);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.baseline {
+  stroke: var(--baseline);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.mark:hover,
+.mark:focus-visible {
+  filter: brightness(1.12);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 10px;
+}
+
+.legend button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  border-radius: 6px;
+}
+
+.legend button:hover {
+  background: var(--hover);
+}
+
+.legend button[aria-pressed="false"] {
+  opacity: 0.42;
+}
+
+.legend .swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.legend .swatch.line {
+  height: 3px;
+  border-radius: 2px;
+}
+
+.scale-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.scale-legend .ramp {
+  display: flex;
+  height: 10px;
+  border-radius: 3px;
+  overflow: hidden;
+  flex: 0 0 140px;
+}
+
+.scale-legend .ramp > i {
+  flex: 1;
+}
+
+#tooltip {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 90ms ease;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.16);
+  padding: 8px 10px;
+  font-size: 12.5px;
+  /* Wide, because the readouts that matter here are not short numbers: a plan node's
+     hover card lists full operator identifiers, virtual table names and rendered
+     operator configs (question templates, extraction prompts). Capped against the
+     viewport so it still fits a narrow window. */
+  max-width: min(680px, calc(100vw - 32px));
+}
+
+#tooltip .tt-title {
+  color: var(--ink-2);
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+
+#tooltip .tt-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+/* The value leads and may be long (a config string); the label stays put on the right
+   rather than being pushed off the edge. */
+#tooltip .tt-val {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#tooltip .tt-name {
+  flex: none;
+}
+
+#tooltip .tt-key {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  flex: none;
+  transform: translateY(-3px);
+}
+
+#tooltip .tt-val {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+#tooltip .tt-name {
+  color: var(--ink-2);
+}
+
+/* ── Tables ───────────────────────────────────────────────────────────────── */
+
+.table-wrap {
+  overflow-x: auto;
+  max-height: 460px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 1;
+}
+
+th[aria-sort="ascending"]::after {
+  content: " ▲";
+  color: var(--muted);
+}
+th[aria-sort="descending"]::after {
+  content: " ▼";
+  color: var(--muted);
+}
+
+td.num {
+  text-align: right;
+}
+
+tbody tr:hover {
+  background: var(--hover);
+}
+
+td.wrap {
+  white-space: normal;
+  min-width: 260px;
+  max-width: 520px;
+}
+
+/* ── Event log ────────────────────────────────────────────────────────────── */
+
+.log {
+  font-family: var(--mono);
+  font-size: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.log .row {
+  display: flex;
+  gap: 10px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  align-items: baseline;
+}
+
+.log .row:last-child {
+  border-bottom: none;
+}
+
+.log .t {
+  color: var(--muted);
+  flex: none;
+}
+
+.log .type {
+  flex: none;
+  min-width: 140px;
+  color: var(--ink-2);
+}
+
+.log .msg {
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.log .row.error {
+  background: color-mix(in srgb, var(--critical) 12%, transparent);
+}
+
+.log .row.error .type {
+  color: var(--critical);
+}
+
+/* ── Misc ─────────────────────────────────────────────────────────────────── */
+
+.notice {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.notice.error {
+  border-color: color-mix(in srgb, var(--critical) 45%, var(--border));
+  color: var(--ink);
+}
+
+.notice.warn {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+}
+
+.empty {
+  color: var(--muted);
+  padding: 24px 4px;
+  text-align: center;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.stale {
+  opacity: 0.55;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ── Facet bar (group-by + filters) ───────────────────────────────────────── */
+
+/* One control surface shared by every analysis chart. It sits above the card it scopes,
+   never inside one, so it is obvious what a selection applies to. */
+.facets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.facet-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  min-width: 0;
+}
+
+.check-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+/* A chip is a toggle, so it has to read as pressed or not without relying on color
+   alone — the border weight and the background both change. */
+.chip {
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--ink-2);
+  cursor: pointer;
+  max-width: 26ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  background: var(--hover);
+}
+
+.chip.on,
+.chip[aria-pressed="true"] {
+  background: var(--selected);
+  border-color: var(--series-1);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.link-button {
+  font: inherit;
+  font-size: 12px;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--series-1);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* ── Progress additions ──────────────────────────────────────────────────── */
+
+.progress .empty-track {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--grid);
+}
+
+.progress.mini {
+  height: 6px;
+  margin-top: 0;
+  min-width: 90px;
+}
+
+.hero-inline {
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  flex: none;
+}
+
+/* ── Per-worker breakdown ────────────────────────────────────────────────── */
+
+.worker-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.worker-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(140px, 3fr) minmax(160px, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.worker-row.unassigned {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.worker-id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.worker-id code {
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worker-id .muted,
+.worker-meta .muted {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worker-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.worker-meta {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 700px) {
+  .worker-row {
+    grid-template-columns: 1fr;
+  }
+
+  .worker-meta {
+    justify-content: flex-start;
+  }
+}
+
+/* ── Job state pills, in-cell bars, pager ────────────────────────────────── */
+
+.state-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.cell-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 110px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  flex: none;
+}
+
+.pager button[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Plan graph ──────────────────────────────────────────────────────────── */
+
+.plan-graph {
+  display: block;
+  /* A wide plan scrolls inside its card rather than squashing its boxes; the .chart
+     wrapper already provides overflow-x. */
+  width: auto;
+  max-width: none;
+  height: auto;
+}
+
+.plan-title {
+  font-size: 13px;
+  font-weight: 650;
+  fill: var(--ink);
+}
+
+.plan-sub {
+  font-size: 11px;
+  fill: var(--ink-2);
+  font-family: var(--mono);
+}
+
+.plan-param {
+  font-size: 11px;
+  fill: var(--muted);
+  font-family: var(--mono);
+}
+
+.plan-badge {
+  font-size: 11px;
+  font-weight: 650;
+  fill: var(--series-1);
+}
+
+/* ── Misc ────────────────────────────────────────────────────────────────── */
+
+.filters.wrap {
+  align-items: flex-start;
+}
+
+.log.tall {
+  max-height: 620px;
+}
+
+.worker-tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--series-1);
+  flex: none;
+}
+
+.card-sub.wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A card that owns its whole row inside a .grid (a chart whose x axis is a group-by
+   with an unpredictable number of categories, so half-width would truncate it). */
+.wide-card {
+  grid-column: 1 / -1;
+}
+
+/* A collapsed filter for a high-cardinality dimension (see facets.js's
+   INLINE_VALUE_LIMIT): the summary carries the selection count so a collapsed filter
+   never hides the fact that it is filtering. */
+.facet-summary {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.facet-summary.on {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.facet-values {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 6px;
+  padding-right: 4px;
+}
+
+.facets .progress-detail {
+  margin-top: 0;
+}
+
+/* Tuned-parameter rows inside a plan node: the name on the left, the value right-
+   aligned, one per line. */
+.plan-param-value {
+  font-size: 11px;
+  fill: var(--ink);
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+/* Multi-select variant of the segmented control: several options can be on at once, so
+   a pressed button carries an accent underline as well as the raised background - two
+   adjacent "on" buttons should not read as one wide selection. */
+.segmented.multi button[aria-pressed="true"] {
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    inset 0 -2px 0 var(--series-1);
+}
+
+/* The collapsed filter half of a facet panel. Its rows only exist once expanded, so a
+   panel with a dozen dimensions still costs two lines when nothing is filtered. */
+.facets .facet-filters {
+  margin-top: 8px;
+  padding-left: 4px;
+}
+
+/* ── Search space ────────────────────────────────────────────────────────── */
+
+/* The gold candidate — the operator a step's labels are derived from. Marked with a
+   tag *and* a tinted row, because "which one is gold" is the single thing this table
+   exists to answer and colour alone does not carry it. */
+.role-tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.role-tag.gold {
+  background: var(--good);
+  color: var(--page);
+}
+
+.role-tag.estimate {
+  background: var(--hover);
+  color: var(--ink-2);
+  border: 1px solid var(--border);
+}
+
+tbody tr.gold-row {
+  background: color-mix(in srgb, var(--good) 12%, transparent);
+}
+
+tbody tr.gold-row td {
+  font-weight: 600;
+}
+
+/* ── Run configuration summary ─────────────────────────────────────────────
+ *
+ * A transposed table: one row per configuration axis, values on the right. Built as a
+ * single three-column grid rather than one grid per row (the .worker-row pattern above)
+ * for one reason - a linked group needs a bracket spanning several rows, and only a
+ * shared grid can span. That also avoids `rowSpan`, which nothing else in this codebase
+ * uses, and collapses cleanly to one column on narrow screens.
+ *
+ * "Fixed" and "swept" are marked with a tag *and* a tint, following .role-tag's rule:
+ * colour alone does not carry a distinction this load-bearing.
+ */
+.config-rows {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(220px, 4fr) auto;
+  gap: 6px 14px;
+  align-items: start;
+}
+
+.config-key {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  padding-top: 4px;
+}
+
+.config-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+/* Not interactive here - these chips report a value, they do not filter by one. And no
+ * width cap: .chip's 26ch ellipsis exists for free-form filter values (a whole query
+ * string), whereas everything here is a configured value that must be readable in full
+ * or the panel cannot be used to check a run. */
+.config-values .chip {
+  cursor: default;
+  max-width: none;
+}
+
+/* One operator set per line, each collapsed behind a disclosure: a seven-state walk
+ * lists 35 operators per set, and 245 lines is a wall rather than an answer. The count
+ * of *sets* is the headline; membership is one click away. */
+.config-values-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.config-values-stacked details {
+  margin: 0;
+}
+
+.config-operators {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0 2px 14px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* The operator identifier verbatim - class, backend, model, ratios, vanilla. Monospace
+ * because it is an identifier (the same string the precompute store keys on), and
+ * wrapping rather than ellipsising because being able to read all of it is the point. */
+.config-operator {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.config-note {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.config-tag {
+  padding-top: 3px;
+}
+
+.role-tag.config-fixed {
+  background: var(--hover);
+  color: var(--ink-2);
+  border: 1px solid var(--border);
+}
+
+.role-tag.config-swept {
+  background: var(--series-1);
+  color: var(--page);
+}
+
+/* The row-cutting box: axes that vary *together* (a zipped precision/recall grid) are
+ * one bracket down the side of their pairs, so the pairing is visible rather than
+ * inferred from two lists that happen to be the same length. */
+.config-key.config-linked {
+  border: 1px solid var(--series-1);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--series-1) 10%, transparent);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.config-linked-note {
+  font-size: 11px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.config-linked-keys {
+  font-size: 11px;
+  color: var(--ink-2);
+  font-family: var(--mono);
+}
+
+/* A group's rows are as wide as the group has axes - five for the ablation, whose arms
+ * tie optimizer, state, operator set and both guarantee components together. Scroll the
+ * row rather than wrapping it: a wrapped tuple stops reading as one combination, which is
+ * the only thing the bracket is there to say. */
+.config-linked-row {
+  background: color-mix(in srgb, var(--series-1) 6%, transparent);
+  border-radius: 6px;
+  padding: 3px 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+/* An operator set inside a group cell: the same disclosure as a standalone row, but it
+ * must not stretch the row it sits in. */
+.config-linked-row details {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 700px) {
+  .config-rows {
+    grid-template-columns: 1fr;
+  }
+  /* A bracket cannot span rows in a single column, and a stretched box would read as a
+   * heading rather than a grouping - so it becomes a labelled band above its pairs. */
+  .config-key.config-linked {
+    grid-row: auto !important;
+  }
+}

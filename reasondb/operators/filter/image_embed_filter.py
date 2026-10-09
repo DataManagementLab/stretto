@@ -16,6 +16,8 @@ from reasondb.database.indentifier import (
 )
 from reasondb.database.database import Database
 from reasondb.database.intermediate_state import IntermediateState
+from reasondb.database.virtual_table import RootTable
+from reasondb.evaluation.benchmark import LabelsDefinition
 from reasondb.optimizer.sampler import ProfilingSampleSpecification
 from reasondb.query_plan.capabilities import Capabilities, BaseCapability
 from reasondb.query_plan.llm_parameters import (
@@ -26,7 +28,11 @@ from reasondb.query_plan.llm_parameters import (
     PhysicalOperatorInterface,
 )
 from reasondb.query_plan.logical_plan import LogicalFilter, LogicalPlanStep
-from reasondb.query_plan.physical_operator import PhysicalOperator, ProfilingCost
+from reasondb.query_plan.physical_operator import (
+    PhysicalOperator,
+    ProfilingCost,
+    RunOutsideResult,
+)
 from reasondb.query_plan.tuning_parameters import (
     TuningParameter,
     TuningParameterContinuous,
@@ -69,6 +75,11 @@ class ImageSimilarityFilter(PhysicalOperator):
 
     async def prepare(self, database: Database, logger: FileLogger):
         image_cols = database.get_concrete_columns_by_type(DataType.IMAGE)
+        if not image_cols:
+            return
+        # Only the image benchmarks reach this point, so a missing server stays
+        # harmless for text-only runs.
+        self.image_similarity_backend.assert_ready()
         embed_cols = {}
         for image_col in image_cols:
             # get new column name to store the the embeddings of images
@@ -185,6 +196,80 @@ class ImageSimilarityFilter(PhysicalOperator):
             distances,
             ProfilingCost(0.0, 0.0),
         )  # Shape: (sample_size, 1)
+
+    async def _run_outside_db(
+        self,
+        inputs: Sequence[VirtualTableIdentifier],
+        input_data: pd.DataFrame,
+        llm_parameters: Dict[str, Any],
+        database_state: IntermediateState,
+        observation: Observation,
+        labels: Optional["LabelsDefinition"],
+        logger: FileLogger,
+    ) -> RunOutsideResult:
+        # This operator normally gets pushed down as SQL (prefers_run_outside_db is
+        # False), but the pipeline reorderer can still place it after an operator
+        # that forces the "run outside db" suffix. The similarity score lives in a
+        # hidden embedding column that isn't projected into `input_data`, so it's
+        # recomputed here via the same SimilarityColumn SQL expression used by
+        # get_sql/profile, restricted to just the rows in this batch.
+        assert isinstance(observation, ThresholdObservation)
+        assert len(inputs) == 1
+
+        input_table = database_state.get_virtual_table(inputs[0])
+        input_index_columns = input_table.sql().get_index_columns()
+        assert len(input_index_columns) == 1, (
+            "ImageSimilarityFilter only supports single index column inputs"
+        )
+        input_index = input_index_columns[0]
+        score_alias = observation.output_concrete_column.alias
+
+        ids = [int(i) for i in input_data.index.get_level_values(input_index.col_name)]
+
+        # Score off the base table rather than off `input_table`'s own SqlQuery: the
+        # similarity depends only on the embedding column, and the row set is already
+        # given by `input_data`. `input_table`'s query carries the Conditions of earlier
+        # run-outside-db steps, whose columns are not written back to the database
+        # until the whole suffix ends.
+        base_table = database_state.get_concrete_table(
+            observation.output_concrete_column.table_identifier
+        )
+        base_sql_str = (
+            RootTable(database_state.database, base_table)
+            .sql()
+            .project([observation.output_concrete_column])
+            .to_positive_str(cheat_selective_filter=False)
+        )
+        # The base table indexes by the original table name; `input_data` may index by
+        # a renamed one. A rename does not renumber, so the values still line up.
+        base_index_name = input_index.orig_col_name
+        ids_str = ", ".join(str(i) for i in ids)
+        # Select the index and score columns by name rather than `SELECT *`, since
+        # the projection also carries the base table's own columns.
+        sql_str = (
+            f"SELECT {base_index_name}, {score_alias} FROM ({base_sql_str}) AS _similarity_batch "
+            f"WHERE {base_index_name} IN ({ids_str})"
+        )
+        results = database_state.sql(sql_str).fetchall()
+        scores_df = pd.DataFrame(
+            results, columns=[base_index_name, "_score"]
+        ).set_index(base_index_name)
+        scores_df = scores_df.reindex(ids)
+
+        n_missing = int(scores_df["_score"].isna().sum())
+        if n_missing:
+            raise RuntimeError(
+                f"ImageSimilarityFilter could not score {n_missing} of {len(ids)} rows: "
+                f"{base_table.identifier} returned no similarity for them. A missing "
+                "score is not a low score, so the rows must not be silently discarded."
+            )
+
+        transform_data = list(
+            zip(input_data.index.tolist(), scores_df["_score"].tolist())
+        )
+        return RunOutsideResult(
+            transform_data, ProfilingCost(0.0, 0.0), input_data=input_data
+        )
 
     def profile_get_decision_matrix(
         self, parameters: Callable[[str], Tensor], profile_output: Any

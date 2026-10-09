@@ -2,23 +2,38 @@ from collections.abc import Callable
 import math
 import pandas as pd
 from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Type, List
+from reasondb.backends.simulate_store import SimulateStore
 from reasondb.database.database import Database
 from reasondb.database.intermediate_state import IntermediateState
 from reasondb.query_plan.capabilities import Capability
 from reasondb.query_plan.logical_plan import (
     LogicalAggregate,
+    LogicalExtract,
+    LogicalFilter,
     LogicalPlan,
     LogicalPlanStep,
 )
+from reasondb.query_plan.llm_parameters import LlmParameterTemplate
 from reasondb.query_plan.unoptimized_physical_plan import (
     OutputCardinalityTooSmall,
     UnoptimizedPhysicalPlan,
     UnoptimizedPhysicalPlanStep,
 )
 from reasondb.query_plan.query import Query
+
+# Module import, never by value: the monitor rebinds its global sink at run start.
+from reasondb.monitor import collector as _monitor
+
+# The same compression-ratio extraction `operator_run` events use, so a candidate in the
+# search space and the same operator's later runs describe their backend identically.
+from reasondb.query_plan.physical_operator import (
+    LABEL_OPERATOR_QUALITY,
+    _extract_cr_info,
+)
 from reasondb.reasoning.exceptions import Mistake
 from reasondb.reasoning.llm import LargeLanguageModel, Message, Prompt, PromptTemplate
 from reasondb.utils.logging import FileLogger
+from reasondb.utils import precompute_modalities
 from reasondb.reasoning.observation import Observation
 
 if TYPE_CHECKING:
@@ -28,6 +43,31 @@ if TYPE_CHECKING:
     )
 
 TEST_OUTPUT_LEN = 3
+
+
+def _label_operator_for(logical_step_type: Type[LogicalPlanStep]):
+    """The label-only operator that can supply ground truth for a logical operator type.
+
+    Imported lazily: the perfect operators pull in ``reasondb.evaluation.benchmark`` for
+    ``LabelsDefinition``, and that package reaches back into the executor and this module.
+    """
+    from reasondb.operators.perfect_operators.perfect_extract import PerfectExtract
+    from reasondb.operators.perfect_operators.perfect_filter import PerfectFilter
+
+    # `LogicalFilter` covers join predicates too: a join predicate is a filter over two
+    # input tables, which is why `get_label_configurator` registers `PerfectFilter` as
+    # both `filter_operators` and `join_predicates`.
+    #
+    # Matched by `issubclass`, not by exact type: `implements_logical_operator` is
+    # compared the same way throughout the toolbox, so a subclassed logical operator must
+    # not silently lose its label source.
+    for logical_type, operator_cls in (
+        (LogicalFilter, PerfectFilter),
+        (LogicalExtract, PerfectExtract),
+    ):
+        if issubclass(logical_step_type, logical_type):
+            return operator_cls
+    return None
 
 
 class ConfigurationState:
@@ -101,15 +141,27 @@ class PlanConfigurator:
     """Configures the physical operators that are available to execute the steps of a logical plan."""
 
     def __init__(
-        self, llm: LargeLanguageModel, physical_operators: "PhysicalOperatorToolbox"
+        self,
+        llm: LargeLanguageModel,
+        physical_operators: "PhysicalOperatorToolbox",
+        use_human_labels: bool = False,
     ):
         """Initialize the PlanConfigurator.
         :param llm: The large language model that sets the configuration parameters.
         :param physical_operators: The toolbox of physical operators that can be used to execute the logical plan.
+        :param use_human_labels: When True, any step whose logical operator carries a
+            ``LabelsDefinition`` gets a label-only operator appended as its last
+            candidate, so the optimizer measures precision and recall against those
+            human labels instead of against the highest-quality model's own verdicts.
+            The label operator is profiled but never executed -- see
+            ``UnoptimizedPhysicalPlanStep.attach_label_operator``. Steps without a
+            ``LabelsDefinition`` are unaffected and keep model-derived labels, so a plan
+            can mix the two.
         """
         self._database: Optional[Database] = None
         self.physical_operators: "PhysicalOperatorToolbox" = physical_operators
         self.llm = llm
+        self.use_human_labels = use_human_labels
 
     def setup(self, database: Database, logger: FileLogger):
         """Setup the available physical operators.
@@ -125,7 +177,24 @@ class PlanConfigurator:
         :param logger: The logger used to log the configuration process.
         """
         await self.llm.prepare()
+        # During --precompute, `prepare()` contacts the operator's modality server
+        # (e.g. for KV cache materialization), so modalities listed in
+        # REASONDB_PRECOMPUTE_SKIP_MODALITIES are skipped here as well. Only takes
+        # effect during --precompute; regular execution and --simulate ignore it.
+        skip_modalities = (
+            precompute_modalities.PRECOMPUTE_SKIP_MODALITIES
+            if SimulateStore.get_precompute() is not None
+            else frozenset()
+        )
         for operator in self.physical_operators:
+            modality = operator.get_modality()
+            if modality in skip_modalities:
+                logger.info(
+                    __name__,
+                    f"[precompute] skipping prepare() for {operator.get_operation_identifier()} "
+                    f"(modality {modality!r} in REASONDB_PRECOMPUTE_SKIP_MODALITIES)",
+                )
+                continue
             await operator.prepare(database=database, logger=logger)
 
     async def wind_down(self):
@@ -193,7 +262,7 @@ class PlanConfigurator:
         data = pd.DataFrame(
             [
                 row
-                async for _, _, row, _ in final_table.get_data(
+                for _, _, row, _ in await final_table.get_data(
                     limit=TEST_OUTPUT_LEN, logger=logger, for_prompt=True
                 )
             ][:TEST_OUTPUT_LEN]
@@ -205,7 +274,7 @@ class PlanConfigurator:
         self, query: Optional[Query], logical_plan: LogicalPlan, logger: FileLogger
     ) -> UnoptimizedPhysicalPlan:
         """Configure the logical plan by using a LLM to set the configuration parameters.
-        Firt assigns goal cardinalities of the sample data that we present to the LLM as additional context for configuring the plan.
+        First assigns goal cardinalities of the sample data that we present to the LLM as additional context for configuring the plan.
         :param query: The query to be executed.
         :param logical_plan: The logical plan to be configured.
         :param logger: The logger used to log the configuration process.
@@ -327,6 +396,10 @@ class PlanConfigurator:
             physical_step = configuration_state.physical_steps[i]
             observation = configuration_state.observations[i]
             assert physical_step is not None and observation is not None
+            # Record the final candidate set this logical step will be optimized over
+            # (built, pseudo-replaced and quality-sorted) for monitoring; a tuned
+            # pipeline keeps only the chosen operators.
+            _record_search_space(physical_step, step_index=i, query=query)
             input_sql_queries = [
                 sql_queries[input_table] for input_table in logical_step.inputs
             ]
@@ -412,7 +485,7 @@ class PlanConfigurator:
                 op_idx=physical_step.chosen_operator_idx,
                 database_state=database_state,
                 logger=logger / "get-observation",
-            ) 
+            )
 
             configuration_state.add_step(
                 step_idx=step_idx,
@@ -459,7 +532,7 @@ class PlanConfigurator:
         :param input_cardinalities: The input cardinalities of each step for configuration.
         :return: The minimum acceptable output cardinalities of each step configuration.
         """
-        aggregate_encountered = False  
+        aggregate_encountered = False
         plan_len = len(logical_plan.plan_steps)
         output_cardinalities = [0] * plan_len
         for i, step in list(enumerate(logical_plan.plan_steps)):
@@ -492,8 +565,51 @@ class PlanConfigurator:
             logical_step.inputs[0] if len(logical_step.inputs) == 1 else None
         )
         physical_step = options.parse(logical_step, response, database_state)
+        self._maybe_attach_label_operator(logical_step, physical_step)
         physical_step.validate_step(database_state, single_input_table)
         return physical_step
+
+    def _maybe_attach_label_operator(
+        self,
+        logical_step: LogicalPlanStep,
+        physical_step: UnoptimizedPhysicalPlanStep,
+    ) -> None:
+        """Append a human-label source to this step, when there is one to append.
+
+        Deliberately after ``options.parse`` rather than via the toolbox: ``parse`` keeps
+        only the operators the configuring LLM named, so a toolbox entry could be dropped,
+        and ``get_capabilities`` derives the reasoner's capability list from the toolbox,
+        which would leak ``PERFECT_FILTER`` into planning.
+        """
+        if not self.use_human_labels:
+            return
+        operator_cls = _label_operator_for(type(logical_step))
+        if operator_cls is None:
+            # No label source implemented for this logical operator (transforms, joins,
+            # projections...), so there is nothing to attach and nothing to report.
+            # Checked before the labels, since many such steps are traditional and
+            # hold no model at all.
+            return
+        labels = logical_step.get_labels()
+        if labels is None:
+            # A semantic step that could carry ground truth and does not: it keeps
+            # model-derived labels. A plan can legitimately mix the two, so this is a log
+            # rather than an error; the wholly-unlabelled case is rejected up front
+            # (see `producers/run_benchmark.enumerate_jobs`).
+            _monitor.record_error(
+                "human_labels",
+                f"No LabelsDefinition on {type(logical_step).__name__} "
+                f"{logical_step.expression!r}; this step keeps model-derived labels.",
+            )
+            return
+        physical_step.attach_label_operator(
+            operator_cls(quality=LABEL_OPERATOR_QUALITY, fake_cost=0.0),
+            # The only key the perfect operators read. `validate_config` iterates the
+            # config's own keys and skips `__expression__`, so a config with just this
+            # one validates; `replace_input_table_name` rewrites LlmParameterTemplate
+            # values, so it follows table renames.
+            {"__expression__": LlmParameterTemplate(logical_step.expression)},
+        )
 
     async def generate_prompt(
         self,
@@ -591,7 +707,7 @@ class PlanConfigurator:
     def get_capabilities(
         self, logical_step: Type[LogicalPlanStep]
     ) -> Sequence[Capability]:
-        """Get the available capabilites for a logical oparation. These come from the available physical operators.
+        """Get the available capabilities for a logical operation. These come from the available physical operators.
         :param logical_step: The logical step to be configured.
         :return: The capabilities of the physical operators for the logical step.
         """
@@ -610,6 +726,57 @@ class PlanConfigurator:
 
                 collected_capabilities[capability] = capability
         return list(collected_capabilities.values())
+
+
+def _record_search_space(physical_step, step_index: int, query) -> None:
+    """Report one logical step's candidate operators to the monitor.
+
+    A no-op unless a run opted into monitoring. Wrapped in a blanket ``except``:
+    telemetry must never be able to fail a run.
+    """
+    if not _monitor.is_enabled():
+        return
+    try:
+        operators = list(physical_step.operators)
+        # Gold is the *last* candidate, because UnoptimizedPhysicalPlanStep sorts them
+        # ascending by quality on construction and the profiler derives labels from
+        # `len(step.operators) - 1`.
+        #
+        # "gold" therefore means *label source* -- under --human-labels a label-only
+        # operator rather than a model. `executable` is reported separately, since a
+        # candidate can be the reference without ever appearing in a plan.
+        gold_index = len(operators) - 1
+        candidates = []
+        for idx, operator in enumerate(operators):
+            info = _extract_cr_info(operator)
+            label_only = getattr(operator, "is_label_only", False)
+            candidates.append(
+                {
+                    "operator": operator.get_operation_identifier(),
+                    "operation_class": type(operator).__name__,
+                    "interface": operator.get_llm_parameters().name,
+                    "quality": getattr(operator, "quality", None),
+                    "fake_cost": getattr(operator, "_fake_cost", None),
+                    "gold": idx == gold_index,
+                    "label_only": label_only,
+                    "executable": not label_only,
+                    "estimated_best": idx == physical_step.chosen_operator_idx,
+                    **info,
+                }
+            )
+        logical = physical_step.logical_plan_step
+        _monitor.record_search_space(
+            query=query.query if query is not None else None,
+            step_index=step_index,
+            logical_type=type(logical).__name__,
+            logical_expression=getattr(logical, "expression", None),
+            output=str(physical_step.output),
+            inputs=[str(i) for i in physical_step.inputs],
+            n_candidates=len(candidates),
+            candidates=candidates,
+        )
+    except Exception as exc:  # pragma: no cover - telemetry must never break a run
+        _monitor.record_error("search_space", f"{type(exc).__name__}: {exc}")
 
 
 LLM_CONFIGURE_PROMPT = """

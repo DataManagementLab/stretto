@@ -76,14 +76,14 @@ class DPReorderer(Reorderer):
         _duplication_factors = {
             col.column_name: ratio for col, ratio in duplication_factors.items()
         }
-        # Get best sample runtimes and selectivites
+        # Get best sample runtimes and selectivities
         assert len(per_operator_and_sample_costs) == len(pipeline.plan_steps)
         acts_on_mm_column = {
             step.logical_plan_step.identifier: step.get_input_columns()[0].column_name
             for step in pipeline.plan_steps
             if len(set(c.column_name for c in step.get_input_columns())) == 1
             if step.get_input_columns()[0].column_name in _duplication_factors
-        }  # only consider steps that act on mupltiple columns
+        }  # only consider steps that act on multiple columns
         pipeline_idx_to_logical_identifier = {
             i: step.logical_plan_step.identifier
             for i, step in enumerate(pipeline.plan_steps)
@@ -142,8 +142,8 @@ class DPReorderer(Reorderer):
                             # the real output size is reduced by selectivity
                             new_real_output_sizes[lid] = size * selectivity
                         else:
-                            # otherwise, a multi-modal element is only removed if all tuples containing is are removed
-                            # This is like a bernully experiment with probability p = 1 - selectivity
+                            # otherwise, a multi-modal element is only removed if all tuples containing it are removed
+                            # This is like a Bernoulli experiment with probability p = 1 - selectivity
                             duplications = size / (node.real_output_sizes[lid] + 1)
                             new_real_output_sizes[lid] = node.real_output_sizes[lid] * (
                                 1 - (1 - selectivity) ** duplications
@@ -187,7 +187,7 @@ class SimpleReorderer(Reorderer):
         database: "Database",
         logger: "FileLogger",
     ) -> "TunedPipeline":
-        # Get best sample runtimes and selectivites
+        # Get best sample runtimes and selectivities
 
         scores = {
             i: (
@@ -217,3 +217,35 @@ class SimpleReorderer(Reorderer):
 
         ordered_pipeline = super().reorder_steps(pipeline, final_order, database)
         return ordered_pipeline
+
+
+class NoOpReorderer(Reorderer):
+    """The identity permutation: the plan runs in the order the optimizer built it.
+
+    Used to disable reordering for ablations (``OptimizationConfig.reorder``,
+    ``LabelOptimizer(reorder=False)``).
+
+    It goes through :meth:`Reorderer.reorder_steps` with ``range(n)`` rather than
+    returning *pipeline* untouched, so the result differs from a reordered one in the
+    order alone: the return type is the same ``TunedPipeline``, and the
+    ``switch_nodes`` bookkeeping the executor reads runs either way (with zero swaps to
+    perform).
+
+    The signature mirrors :class:`DPReorderer`'s exactly, keywords included, because both
+    call sites in ``GradientDescentOptimizer`` pass every argument by name and neither
+    knows which reorderer it holds.
+    """
+
+    def reorder(
+        self,
+        per_operator_and_sample_costs: Sequence[float],
+        pipeline: "MultiModalTunedPipeline",
+        dependencies: Sequence[Set[int]],
+        selectivities: "Selectivities",
+        duplication_factors: Dict[VirtualColumnIdentifier, float],
+        input_sizes: Dict[VirtualTableIdentifier, int],
+        database: "Database",
+        logger: "FileLogger",
+    ) -> "TunedPipeline":
+        identity = range(len(pipeline.plan_steps))
+        return super().reorder_steps(pipeline, identity, database)

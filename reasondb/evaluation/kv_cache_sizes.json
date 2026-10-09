@@ -1,0 +1,718 @@
+{
+  "benchmarks": {
+    "artwork_random": {
+      "dev": {
+        "expected_attention": {
+          "models": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "0.0": {
+                "bytes": 19357322732,
+                "entries": 65,
+                "indices": {
+                  "0.5": 37916702,
+                  "0.9": 7652894
+                }
+              },
+              "0.5": {
+                "bytes": 10750560210,
+                "entries": 72,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 2145670162,
+                "entries": 72,
+                "indices": {}
+              }
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "0.5": {
+                "bytes": 193388340392,
+                "entries": 65,
+                "indices": {
+                  "0.9": 150774304,
+                  "0.99": 14807584
+                }
+              },
+              "0.9": {
+                "bytes": 38573943208,
+                "entries": 65,
+                "indices": {}
+              },
+              "0.99": {
+                "bytes": 4183775922,
+                "entries": 72,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "0.3": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.6": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "0.0": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            }
+          },
+          "sources": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "cache_root": "~/.reasondb/cache/artwork_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "cache_root": "~/.reasondb/cache/artwork_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "cache_root": "~/.reasondb/cache/artwork_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "cache_root": "~/.reasondb/cache/artwork_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            }
+          }
+        }
+      }
+    },
+    "artwork_random_medium": {
+      "dev": {
+        "expected_attention": {
+          "models": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "0.0": {
+                "bytes": 299758654211,
+                "entries": 994,
+                "indices": {
+                  "0.5": 587143179,
+                  "0.9": 118494731
+                }
+              },
+              "0.5": {
+                "bytes": 149893026447,
+                "entries": 994,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 29918837711,
+                "entries": 994,
+                "indices": {}
+              }
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "0.5": {
+                "bytes": 3000179668079,
+                "entries": 996,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 597464127395,
+                "entries": 994,
+                "indices": {}
+              },
+              "0.99": {
+                "bytes": 58482942185,
+                "entries": 994,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "0.3": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.6": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "0.0": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            }
+          },
+          "sources": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "cache_root": "~/.reasondb/cache/artwork_random_medium_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "cache_root": "~/.reasondb/cache/artwork_random_medium_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "cache_root": "~/.reasondb/cache/artwork_random_medium_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "cache_root": "~/.reasondb/cache/artwork_random_medium_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            }
+          }
+        }
+      }
+    },
+    "ecommerce_random_large": {
+      "dev": {
+        "expected_attention": {
+          "models": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "0.0": {
+                "bytes": 309537787922,
+                "entries": 1000,
+                "indices": {}
+              },
+              "0.5": {
+                "bytes": 154783698962,
+                "entries": 1000,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 30927806994,
+                "entries": 1000,
+                "indices": {}
+              }
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "0.5": {
+                "bytes": 3092533081202,
+                "entries": 1000,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 618040009842,
+                "entries": 1000,
+                "indices": {}
+              },
+              "0.99": {
+                "bytes": 60297192562,
+                "entries": 1000,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "0.3": {
+                "bytes": 50236071960,
+                "entries": 969,
+                "indices": {}
+              },
+              "0.6": {
+                "bytes": 28692646040,
+                "entries": 969,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 14261936024,
+                "entries": 969,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "0.0": {
+                "bytes": 28780339388,
+                "entries": 969,
+                "indices": {}
+              },
+              "0.5": {
+                "bytes": 14373356860,
+                "entries": 969,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 5705284092,
+                "entries": 969,
+                "indices": {}
+              }
+            }
+          },
+          "sources": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "cache_root": "~/.reasondb/cache/ecommerce_random_large_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "cache_root": "~/.reasondb/cache/ecommerce_random_large_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "cache_root": "~/.reasondb/cache/ecommerce_random_large_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "cache_root": "~/.reasondb/cache/ecommerce_random_large_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            }
+          }
+        }
+      }
+    },
+    "email_random": {
+      "dev": {
+        "expected_attention": {
+          "models": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "0.0": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.99": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "0.3": {
+                "bytes": 264748269870,
+                "entries": 1000,
+                "indices": {
+                  "0.6": 592365019,
+                  "0.8": 296525019
+                }
+              },
+              "0.6": {
+                "bytes": 151272149298,
+                "entries": 1000,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 75536943922,
+                "entries": 1000,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "0.0": {
+                "bytes": 151360253650,
+                "entries": 1000,
+                "indices": {
+                  "0.5": 297171161,
+                  "0.8": 119654617
+                }
+              },
+              "0.5": {
+                "bytes": 75659615314,
+                "entries": 1000,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 30215300690,
+                "entries": 1000,
+                "indices": {}
+              }
+            }
+          },
+          "sources": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "cache_root": "~/.reasondb/cache/email_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "cache_root": "~/.reasondb/cache/email_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "cache_root": "~/.reasondb/cache/email_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "cache_root": "~/.reasondb/cache/email_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            }
+          }
+        }
+      }
+    },
+    "movie_random": {
+      "dev": {
+        "expected_attention": {
+          "models": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "0.0": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.99": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "0.3": {
+                "bytes": 12503056474,
+                "entries": 868,
+                "indices": {
+                  "0.6": 29131047,
+                  "0.8": 14889767
+                }
+              },
+              "0.6": {
+                "bytes": 7128430554,
+                "entries": 868,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 3482662874,
+                "entries": 868,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "0.0": {
+                "bytes": 7208218218,
+                "entries": 868,
+                "indices": {
+                  "0.5": 15433509,
+                  "0.8": 6862629
+                }
+              },
+              "0.5": {
+                "bytes": 3587644778,
+                "entries": 868,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 1393499498,
+                "entries": 868,
+                "indices": {}
+              }
+            }
+          },
+          "sources": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "cache_root": "~/.reasondb/cache/movie_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "cache_root": "~/.reasondb/cache/movie_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "cache_root": "~/.reasondb/cache/movie_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "cache_root": "~/.reasondb/cache/movie_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            }
+          }
+        }
+      }
+    },
+    "movie_random_huge": {
+      "dev": {
+        "expected_attention": {
+          "models": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "0.0": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.99": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "0.3": {
+                "bytes": 133027990322,
+                "entries": 9864,
+                "indices": {}
+              },
+              "0.6": {
+                "bytes": 75853673522,
+                "entries": 9864,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 36991480882,
+                "entries": 9864,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "0.0": {
+                "bytes": 76734709074,
+                "entries": 9864,
+                "indices": {}
+              },
+              "0.5": {
+                "bytes": 38191448146,
+                "entries": 9864,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 14801780818,
+                "entries": 9864,
+                "indices": {}
+              }
+            }
+          },
+          "sources": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "cache_root": "~/.reasondb/cache/movie_random_huge_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "cache_root": "~/.reasondb/cache/movie_random_huge_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "cache_root": "~/.reasondb/cache/movie_random_huge_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "cache_root": "~/.reasondb/cache/movie_random_huge_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            }
+          }
+        }
+      }
+    },
+    "rotowire_random": {
+      "dev": {
+        "expected_attention": {
+          "models": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "0.0": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "0.5": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.9": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              },
+              "0.99": {
+                "bytes": 0,
+                "entries": 0,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "0.3": {
+                "bytes": 69653473298,
+                "entries": 728,
+                "indices": {
+                  "0.6": 156491787,
+                  "0.8": 78519307
+                }
+              },
+              "0.6": {
+                "bytes": 39786340306,
+                "entries": 728,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 19825240594,
+                "entries": 728,
+                "indices": {}
+              }
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "0.0": {
+                "bytes": 39856303794,
+                "entries": 728,
+                "indices": {
+                  "0.5": 78980873,
+                  "0.8": 32168201
+                }
+              },
+              "0.5": {
+                "bytes": 19914568626,
+                "entries": 728,
+                "indices": {}
+              },
+              "0.8": {
+                "bytes": 7930460530,
+                "entries": 728,
+                "indices": {}
+              }
+            }
+          },
+          "sources": {
+            "llava-hf/llama3-llava-next-8b-hf": {
+              "cache_root": "~/.reasondb/cache/rotowire_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "llava-hf/llava-next-72b-hf": {
+              "cache_root": "~/.reasondb/cache/rotowire_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-70B-Instruct": {
+              "cache_root": "~/.reasondb/cache/rotowire_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            },
+            "meta-llama/Llama-3.1-8B-Instruct": {
+              "cache_root": "~/.reasondb/cache/rotowire_random_dev",
+              "host": "gpu-cluster",
+              "measured": "2026-09-18"
+            }
+          }
+        }
+      }
+    }
+  },
+  "format": 1
+}

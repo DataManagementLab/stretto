@@ -80,6 +80,8 @@ class PhysicalPlan(Plan):
         upper_input_column_origins = [
             lower_node.get_column_origin(c) for c in upper_node.get_input_columns()
         ]
+        if len(upper_input_column_origins) == 0:
+            upper_input_column_origins = [0]
         assert len(set(upper_input_column_origins)) == 1, "No switching possible"
 
         lower_input_to_update = upper_input_column_origins[0]
@@ -145,9 +147,9 @@ class PhysicalPlanStep(PlanStep):
     ) -> Sequence[pd.DataFrame]:
         result = []
         if override_inputs is not None:
-            assert set(override_inputs).issubset(set(self.inputs)), (
-                "Override inputs must be a subset of the original inputs."
-            )
+            assert set(override_inputs).issubset(
+                set(self.inputs)
+            ), "Override inputs must be a subset of the original inputs."
 
         inputs = override_inputs if override_inputs is not None else self.inputs
         for input_table_identifier in inputs:
@@ -156,7 +158,7 @@ class PhysicalPlanStep(PlanStep):
             if input_cardinality is not None:
                 limit = min(limit or 2**32, max(0, input_cardinality))
 
-            data_iterator = input_table.get_data(
+            data_iterator = await input_table.get_data(
                 limit=limit,
                 offset=0,
                 logger=logger,
@@ -165,8 +167,7 @@ class PhysicalPlanStep(PlanStep):
                 finalized=finalized,
             )
             skip_flag = self.logical_plan_step.identifier if enable_skip_flags else None
-            df = await database_state.data_iterator_to_dataframe(
-                data_iterator=(x[:3] async for x in data_iterator),
+            df = data_iterator.to_df_with_skip_flags(
                 index_columns=input_table.index_columns,
                 skip_flag=skip_flag,
                 logger=logger,

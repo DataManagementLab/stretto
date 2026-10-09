@@ -7,16 +7,7 @@ from reasondb.optimizer.guarantees import PrecisionGuarantee, RecallGuarantee
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# data_path = Path("SemBench/files/animals")
-# if not data_path.exists():
-#     data_path.mkdir(parents=True, exist_ok=True)
-#     gdown.download(
-#         "https://drive.google.com/uc?id=1HG6tvXIA0BtpqbZqCR46oNSeY2yZ4Lko",
-#         output="SemBench/files/medical/animals.zip",
-#     )
-#     with zipfile.ZipFile("SemBench/files/medical/animals.zip", "r") as zip_ref:
-#         zip_ref.extractall("SemBench/files/animals/")
-
+# Image variant of the animals table (used by the commented-out image queries below):
 # csv_image = orig_csv = (
 #    Path(__file__).parents[1]
 #    / "reasondb"
@@ -71,7 +62,7 @@ with RaccoonDB("animals_sampled") as rc:
         "Count the rows as [lion_sounds_count]"
     )
     # nl_query = rc.nl_query(
-    #     "How many audio clips contain the sound of an elephant?",
+    #     "How many audio clips contain the sound of a lion?",
     # )
     result = df_query.execute(
         "lion_sounds_count",

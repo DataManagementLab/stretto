@@ -87,8 +87,8 @@ class Biodex(Benchmark):
 
         return pmid_to_label
 
-    @staticmethod
-    def load_from_disk(split: Literal["train", "dev", "test"]) -> "Benchmark":
+    @classmethod
+    def load_from_disk(cls, split: Literal["train", "dev", "test"]) -> "Benchmark":
         patient_report_table = Biodex.load_patient_reports_table(split)
         reactions_table = Biodex.load_reactions_table(split)
         benchmark = Biodex(

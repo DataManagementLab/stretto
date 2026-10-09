@@ -97,11 +97,6 @@ with RaccoonDB("movie_sampled") as rc:
 #       "Which is the positivity ratio of reviews for the movie 'taken_3' (positive_reviews / total_reviews)?",
 #    )
 
-#    df_query = (
-#        reviews.filter("{id} is taken_3")
-#        .....
-#    )
-
 #    result = nl_query.execute(
 #        "positive_reviews_for_taken_3_count",
 #        PrecisionGuarantee(0.8),

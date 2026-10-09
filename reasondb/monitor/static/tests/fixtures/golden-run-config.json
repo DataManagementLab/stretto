@@ -1,0 +1,262 @@
+{
+  "axes": [
+    {
+      "display": [
+        "Default suite vs vanilla only"
+      ],
+      "key": "state_plan",
+      "kind": "fixed",
+      "label": "State plan",
+      "values": [
+        "ablation"
+      ]
+    },
+    {
+      "display": [
+        "optimizer default"
+      ],
+      "key": "sample_size",
+      "kind": "fixed",
+      "label": "Sample size",
+      "values": [
+        "optimizer default"
+      ]
+    },
+    {
+      "display": [
+        "no"
+      ],
+      "key": "adaptive_sampling",
+      "kind": "fixed",
+      "label": "Adaptive sampling",
+      "values": [
+        false
+      ]
+    },
+    {
+      "display": [
+        "yes"
+      ],
+      "key": "tune_parameters",
+      "kind": "fixed",
+      "label": "Parameter tuning",
+      "values": [
+        true
+      ]
+    },
+    {
+      "display": [
+        "yes"
+      ],
+      "key": "reorder",
+      "kind": "fixed",
+      "label": "Operator reordering",
+      "values": [
+        true
+      ]
+    },
+    {
+      "display": [
+        "no"
+      ],
+      "key": "human_labels",
+      "kind": "fixed",
+      "label": "Human labels",
+      "values": [
+        false
+      ]
+    },
+    {
+      "display": [
+        "no"
+      ],
+      "key": "use_indexes",
+      "kind": "fixed",
+      "label": "Index use",
+      "values": [
+        false
+      ]
+    },
+    {
+      "display": [
+        "runtime"
+      ],
+      "key": "cost_type",
+      "kind": "fixed",
+      "label": "Cost model",
+      "values": [
+        "runtime"
+      ]
+    },
+    {
+      "display": [
+        "yes"
+      ],
+      "key": "simulate",
+      "kind": "fixed",
+      "label": "Simulated",
+      "values": [
+        true
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "id": "benchmark+approach+step_idx+operator_set",
+      "keyLabels": [
+        "Benchmark",
+        "Optimizer",
+        "Sweep state",
+        "Operator set"
+      ],
+      "keys": [
+        "benchmark",
+        "approach",
+        "step_idx",
+        "operator_set"
+      ],
+      "kind": "swept",
+      "label": "Benchmark / Optimizer / Sweep state / Operator set",
+      "operatorSets": {
+        "ImageQaFilter-ImageQABackend-72B-cr0.0-vanilla\nImageQaExtract-ImageQABackend-72B-cr0.0-vanilla": [
+          "ImageQaFilter-ImageQABackend-72B-cr0.0-vanilla",
+          "ImageQaExtract-ImageQABackend-72B-cr0.0-vanilla"
+        ],
+        "ImageQaFilter-ImageQABackend-8B-cr0.5\nImageQaExtract-ImageQABackend-8B-cr0.5\nImageQaFilter-ImageQABackend-72B-cr0.0-vanilla\nImageQaExtract-ImageQABackend-72B-cr0.0-vanilla": [
+          "ImageQaFilter-ImageQABackend-8B-cr0.5",
+          "ImageQaExtract-ImageQABackend-8B-cr0.5",
+          "ImageQaFilter-ImageQABackend-72B-cr0.0-vanilla",
+          "ImageQaExtract-ImageQABackend-72B-cr0.0-vanilla"
+        ],
+        "TextQaFilter-LLMTextQABackend-70B-cr0.0-vanilla\nTextQaExtract-LLMTextQABackend-70B-cr0.0-vanilla": [
+          "TextQaFilter-LLMTextQABackend-70B-cr0.0-vanilla",
+          "TextQaExtract-LLMTextQABackend-70B-cr0.0-vanilla"
+        ],
+        "TextQaFilter-LLMTextQABackend-8B-cr0.5\nTextQaExtract-LLMTextQABackend-8B-cr0.5\nTextQaFilter-LLMTextQABackend-70B-cr0.0-vanilla\nTextQaExtract-LLMTextQABackend-70B-cr0.0-vanilla": [
+          "TextQaFilter-LLMTextQABackend-8B-cr0.5",
+          "TextQaExtract-LLMTextQABackend-8B-cr0.5",
+          "TextQaFilter-LLMTextQABackend-70B-cr0.0-vanilla",
+          "TextQaExtract-LLMTextQABackend-70B-cr0.0-vanilla"
+        ]
+      },
+      "tuples": [
+        [
+          "artwork_random_medium",
+          "No optimization",
+          "1",
+          {
+            "members": [
+              "ImageQaFilter-ImageQABackend-72B-cr0.0-vanilla",
+              "ImageQaExtract-ImageQABackend-72B-cr0.0-vanilla"
+            ],
+            "steps": []
+          }
+        ],
+        [
+          "artwork_random_medium",
+          "Stretto",
+          "0",
+          {
+            "members": [
+              "ImageQaFilter-ImageQABackend-8B-cr0.5",
+              "ImageQaExtract-ImageQABackend-8B-cr0.5",
+              "ImageQaFilter-ImageQABackend-72B-cr0.0-vanilla",
+              "ImageQaExtract-ImageQABackend-72B-cr0.0-vanilla"
+            ],
+            "steps": []
+          }
+        ],
+        [
+          "artwork_random_medium",
+          "Stretto",
+          "1",
+          {
+            "members": [
+              "ImageQaFilter-ImageQABackend-72B-cr0.0-vanilla",
+              "ImageQaExtract-ImageQABackend-72B-cr0.0-vanilla"
+            ],
+            "steps": []
+          }
+        ],
+        [
+          "movie_random",
+          "No optimization",
+          "1",
+          {
+            "members": [
+              "TextQaFilter-LLMTextQABackend-70B-cr0.0-vanilla",
+              "TextQaExtract-LLMTextQABackend-70B-cr0.0-vanilla"
+            ],
+            "steps": []
+          }
+        ],
+        [
+          "movie_random",
+          "Stretto",
+          "0",
+          {
+            "members": [
+              "TextQaFilter-LLMTextQABackend-8B-cr0.5",
+              "TextQaExtract-LLMTextQABackend-8B-cr0.5",
+              "TextQaFilter-LLMTextQABackend-70B-cr0.0-vanilla",
+              "TextQaExtract-LLMTextQABackend-70B-cr0.0-vanilla"
+            ],
+            "steps": []
+          }
+        ],
+        [
+          "movie_random",
+          "Stretto",
+          "1",
+          {
+            "members": [
+              "TextQaFilter-LLMTextQABackend-70B-cr0.0-vanilla",
+              "TextQaExtract-LLMTextQABackend-70B-cr0.0-vanilla"
+            ],
+            "steps": []
+          }
+        ]
+      ],
+      "variants": [
+        null,
+        null,
+        null,
+        "operator-sets"
+      ]
+    },
+    {
+      "id": "precision+recall",
+      "keyLabels": [
+        "Precision target",
+        "Recall target"
+      ],
+      "keys": [
+        "precision",
+        "recall"
+      ],
+      "kind": "swept",
+      "label": "Precision target / Recall target",
+      "operatorSets": {},
+      "tuples": [
+        [
+          "0.5",
+          "0.5"
+        ],
+        [
+          "0.7",
+          "0.7"
+        ],
+        [
+          "0.9",
+          "0.9"
+        ]
+      ],
+      "variants": [
+        null,
+        null
+      ]
+    }
+  ],
+  "jobCount": 18,
+  "source": "planned"
+}

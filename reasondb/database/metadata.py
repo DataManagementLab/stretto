@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 
 DISTANCE_THRESHOLD_MAX = 0.2
-DISTANCE_THRESHOLD_MIN = 0.0  
+DISTANCE_THRESHOLD_MIN = 0.0
 
 
 @dataclass
@@ -536,17 +536,24 @@ class DatabaseMetadata:
                 )
 
         # get similar hidden columns
-        assert len(free_form_collect_args) <= 1
         has_free_form = len(free_form_collect_args) > 0
         if has_free_form:
-            return await self.get_similar_free_form(
-                table,
-                parameter_collect_args,
-                free_form_collect_args[0],
-                operation,
-                logger=logger,
-                is_materialized=is_materialized,
-            )
+            found = None
+            for free_form_arg in free_form_collect_args:
+                r = await self.get_similar_free_form(
+                    table,
+                    parameter_collect_args,
+                    free_form_arg,
+                    operation,
+                    logger=logger,
+                    is_materialized=is_materialized,
+                )
+                if found is None:
+                    found = r
+                elif found != r:
+                    return None
+            return found
+
         return self.get_similar_exact_match(
             table,
             parameter_collect_args,

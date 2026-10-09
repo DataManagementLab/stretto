@@ -63,6 +63,9 @@ class ImageQaFilter(PhysicalOperator):
     def prefers_run_outside_db(self) -> bool:
         return True
 
+    def get_modality(self) -> str:
+        return "image"
+
     async def get_observation(
         self,
         database_state: IntermediateState,
@@ -132,6 +135,7 @@ class ImageQaFilter(PhysicalOperator):
             logger=logger / "image-qa-filter",
         )
         keep_answer_alternative = "1" if keep_answer.lower() == "yes" else "0"
+        inverse = keep_answer.lower() == "no"
         mask = [
             (
                 data_id,
@@ -142,7 +146,7 @@ class ImageQaFilter(PhysicalOperator):
                     .startswith(keep_answer_alternative.lower())
                 )
                 if not self.image_qa_backend.returns_log_odds
-                else log_odds,
+                else (log_odds if not inverse else -log_odds),
             )
             for data_id, answer, log_odds in answers
         ]

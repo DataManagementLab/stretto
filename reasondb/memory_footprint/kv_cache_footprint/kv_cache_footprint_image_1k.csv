@@ -1,0 +1,8 @@
+Model,Ratio,Artwork (1000),E-Comm. (1000)
+Llava-Next 72B,0.0,5800,5700
+Llava-Next 72B,0.5,2900,2900
+Llava-Next 72B,0.9,593,576
+Llava-Next 72B,0.99,58,57
+Llava-Next 8B,0.0,298,289
+Llava-Next 8B,0.5,149,145
+Llava-Next 8B,0.9,30,29
