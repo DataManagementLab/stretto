@@ -149,26 +149,28 @@ leaving out `--results-root artifacts` (and pointing `plot_kvop.py` at your run 
 ## 📈 The paper's figures
 
 [`artifacts/`](artifacts/) holds the results behind every figure and table, so all of them
-redraw without a GPU or model server. Run from the repository root; the
-`plot_sweep.py` commands share the prefix
-`python scripts/plot_sweep.py --results-root artifacts`.
+redraw without a GPU or model server. Run the commands from the repository root.
 
-| Paper | Shows | Command |
-| --- | --- | --- |
-| Figure 5 (top) | accuracy vs. Lotus and Abacus | `… --experiment base01 --width 6.5 --height-scale 1.1` |
-| Figure 5 (bottom) | runtime vs. Lotus | `… --experiment base01 --exclude-arms abacus --height-scale 1.2` (`…_breakdown_sum.pdf`) |
-| Figure 6 | KV profile quality vs. runtime | `python scripts/plot_quality_runtime.py --results-dir artifacts/single_operator --dataset email artwork --model llama llava` |
-| Figure 7 | global vs. local optimization | `… --experiment mode01 --benchmarks ecommerce_random_large --no-overall --figures target-met metrics --metrics total_runtime --overall-width 1.5` |
-| Figure 8 | storage/runtime trade-off | `… --experiment ops01 --figures metrics --metrics total_runtime --annotate-minimum --width 6.75 --height-scale 1.1` |
-| Figure 9 | KV cache footprint vs. speedup | `python scripts/plot_kvop.py kvop01 --target-ratio 0.7 0.9 --compact --metric total --aggregate geomean --speedup-bins 1.0 1.1 1.2 1.3 --width 5.6` (the paper adds the budget callouts by hand) |
-| Figure 10 | profiling sample size | `… --experiment samp01 --reference-from abl01` (left) and `… --experiment samp01` (right) |
-| Table 1 | ablation | `python scripts/ablation_table.py --output-dirs artifacts/abl01/merged` (`--latex` for table rows) |
-| Figure 11 | number of semantic operators | `… --experiment mode01 --facet-by num_semops --no-joins --no-overall --exclude-arms optim_local --x-label "" --width 3.3 --height-scale 1.2 --legend-columns 4`, and again with `--figures metrics --metrics mean_total_runtime --pooling mean --legend-columns 3` instead of the last two flags |
-| Figure 12 | human vs. model labels | `python scripts/plot_label_reference.py --output-dirs artifacts/ref01/merged --figures sections` (`…_box_low_targets.pdf`; the paper adds one hand-drawn callout) |
-| Figures 13, 14 | KV cache footprint by dataset size | `python reasondb/memory_footprint/kv_cache_footprint/plot_kv_cache_footprint.py` |
+| Paper | Shows | Command | Output file |
+| --- | --- | --- | --- |
+| Figure 5 (top) | accuracy vs. Lotus and Abacus | `python scripts/plot_sweep.py --results-root artifacts --experiment base01 --width 6.5 --height-scale 1.1` | `baselines_target_met.pdf` |
+| Figure 5 (bottom) | runtime vs. Lotus | `python scripts/plot_sweep.py --results-root artifacts --experiment base01 --exclude-arms abacus --height-scale 1.2` | `baselines_without_abacus_breakdown_sum.pdf` |
+| Figure 6 | KV profile quality vs. runtime | `python scripts/plot_quality_runtime.py --results-dir artifacts/single_operator --dataset email artwork --model llama llava` | `quality_runtime_results.pdf` |
+| Figure 7 | global vs. local optimization | `python scripts/plot_sweep.py --results-root artifacts --experiment mode01 --benchmarks ecommerce_random_large --no-overall --figures target-met metrics --metrics total_runtime --overall-width 1.5` | `modes_target_met.pdf`, `modes_total_runtime.pdf` |
+| Figure 8 | storage/runtime trade-off | `python scripts/plot_sweep.py --results-root artifacts --experiment ops01 --figures metrics --metrics total_runtime --annotate-minimum --width 6.75 --height-scale 1.1` | `operator_count_minima_total_runtime.pdf` |
+| Figure 9 | KV cache footprint vs. speedup | `python scripts/plot_kvop.py kvop01 --target-ratio 0.7 0.9 --compact --metric total --aggregate geomean --speedup-bins 1.0 1.1 1.2 1.3 --width 5.6` | `kvop01_footprint_speedup_total_geomean_compact_p0_7_p0_9.pdf` |
+| Figure 10 (left) | profiling sample size: runtime | `python scripts/plot_sweep.py --results-root artifacts --experiment samp01 --reference-from abl01` | `sample_size_with_no_optim_breakdown_overall_sum.pdf` |
+| Figure 10 (right) | profiling sample size: targets met | `python scripts/plot_sweep.py --results-root artifacts --experiment samp01` | `sample_size_target_met_overall.pdf` |
+| Table 1 | ablation | `python scripts/ablation_table.py --output-dirs artifacts/abl01/merged` | printed (`--latex` for table rows) |
+| Figure 11 (left) | number of semantic operators: targets met | `python scripts/plot_sweep.py --results-root artifacts --experiment mode01 --facet-by num_semops --no-joins --no-overall --exclude-arms optim_local --x-label "" --width 3.3 --height-scale 1.2 --legend-columns 4` | `modes_per_num_semops_without_optim_local_target_met.pdf` |
+| Figure 11 (right) | number of semantic operators: runtime | `python scripts/plot_sweep.py --results-root artifacts --experiment mode01 --facet-by num_semops --no-joins --no-overall --exclude-arms optim_local --x-label "" --width 3.3 --figures metrics --metrics mean_total_runtime --pooling mean --legend-columns 3` | `modes_per_num_semops_without_optim_local_mean_total_runtime_mean.pdf` |
+| Figure 12 | human vs. model labels | `python scripts/plot_label_reference.py --output-dirs artifacts/ref01/merged --figures sections` | `label_reference_sections_box_low_targets.pdf` |
+| Figures 13, 14 | KV cache footprint by dataset size | `python reasondb/memory_footprint/kv_cache_footprint/plot_kv_cache_footprint.py` | `kv_footprint_overview_image.pdf`, `kv_footprint_overview_text.pdf` |
 
-Each command logs the files it writes; `plot_sweep.py` writes into the task's `merged/`
-directory unless `--figure-dir` says otherwise. The footprint CSVs beyond 1k items
+Each command logs the files it writes. `plot_sweep.py` writes into the task's `merged/`
+directory unless `--figure-dir` says otherwise, `plot_kvop.py` into `artifacts/kvops/kvop01/figures/`,
+and `plot_kv_cache_footprint.py` into a `figures/` directory next to it. Figures 9 and 12 have
+callouts in the paper that were added by hand. The footprint CSVs beyond 1k items
 are projections of the measured 1k-item sizes (`scale_footprint_csv.py`).
 
 `plot_sweep.py` draws more than these figures: `--figures breakdown|target-met|metrics`,
