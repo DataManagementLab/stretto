@@ -424,6 +424,10 @@ def main() -> None:
         "buckets that partition one query set is not a quantity).",
     )
     parser.add_argument(
+        "--no-joins", action="store_true",
+        help="Drop queries that contain a semantic join.",
+    )
+    parser.add_argument(
         "--figures", nargs="+", choices=["target-met", "breakdown", "metrics"], default=None,
         help="Which figure families to draw (default: the preset's target-met and "
         "breakdown). 'metrics' adds one figure per --metrics entry - curves where the "
@@ -610,6 +614,8 @@ def main() -> None:
     )
     df, arm_order = select_arms(df, comparison.order(df), args.arms, args.exclude_arms)
     df = select_guarantees(df, args.guarantees)
+    if args.no_joins:
+        df = df[df["num_sem_join"].fillna(0) == 0]
     df, arm_order, reference = attach_reference(
         df, arm_order, args, args.split, args.benchmarks
     )
