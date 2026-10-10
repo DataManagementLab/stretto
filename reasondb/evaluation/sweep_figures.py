@@ -51,6 +51,8 @@ logger = logging.getLogger(__name__)
 # dense: thicker strokes merge into a solid wash. Must stay in step with the repeat count
 # in `HATCH_CYCLE`. Assigned rather than ``setdefault`` because the key always exists.
 plt.rcParams["hatch.linewidth"] = 0.25
+plt.rcParams["pdf.fonttype"] = 42
+plt.rcParams["ps.fonttype"] = 42
 
 #: Resolution the hatched bars are rasterized into the PDF at (see ``_stack_bars``). Only
 #: that layer - the type, axes and legend on the same page stay vector - so this is not the
